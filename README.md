@@ -4,14 +4,14 @@ Each developer can run either pilot independently. SRResNet trains from scratch 
 
 ## Run the pilot
 
-On a Linux machine with an NVIDIA T4, use Python 3.11 or 3.12 and a driver compatible with the CUDA 12.4 PyTorch wheels. From the repository root:
+On a Linux machine with an NVIDIA T4, use Python 3.11 or 3.12 and a driver compatible with the CUDA 13.0 PyTorch wheels. From the repository root:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu124
+python -m pip install torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu130
 python -m pip install -r requirements.txt
-python -c 'import torch; print(torch.cuda.get_device_name(0))'
+python -c 'import torch; print(torch.__version__, torch.version.cuda, torch.cuda.get_device_name(0)); assert torch.version.cuda == "13.0"'
 wandb login
 bash scripts/download_div2k.sh
 # Standalone SRResNet experiment
