@@ -14,7 +14,7 @@ else
     pretrain_args+=(--resume "$pretrain_dir/latest.pt")
   fi
   for arg in "$@"; do
-    case "$arg" in --lpips|--no-lpips) pretrain_args+=("$arg");; esac
+    case "$arg" in --lpips|--no-lpips|--data-parallel) pretrain_args+=("$arg");; esac
   done
   "$python_bin" train.py "${common[@]}" "${pretrain_args[@]}"
   start=(--init-generator "$pretrain_dir/latest.pt")

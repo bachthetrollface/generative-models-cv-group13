@@ -39,6 +39,7 @@ def arguments():
     p.add_argument("--vgg-layer", choices=["vgg22", "vgg54"], default="vgg54")
     p.add_argument("--adv-weight", type=float, help="Adversarial weight, default 0 for SRResNet and 0.001 for SRGAN")
     p.add_argument("--device", choices=["auto", "cuda", "mps", "cpu"], default="auto")
+    p.add_argument("--data-parallel", action="store_true", help="Split training batches across visible CUDA GPUs on one machine")
     p.add_argument("--log-every", type=int, default=10)
     p.add_argument("--save-every", type=int, default=250)
     p.add_argument("--val-every", type=int, default=50)
@@ -198,6 +199,9 @@ def train(args):
         raise ValueError(f"{history_path} already records a run. Select a fresh output directory.")
 
     device = device_for(args.device)
+    gpu_count = torch.cuda.device_count() if device.type == "cuda" else 0
+    if args.data_parallel and (gpu_count < 2 or args.batch_size < gpu_count):
+        raise ValueError("--data-parallel needs at least two visible CUDA GPUs and at least one sample per GPU.")
     torch.manual_seed(args.seed)
     generator = SRResNet().to(device)
     discriminator = Discriminator().to(device) if args.adv_weight else None
@@ -213,6 +217,14 @@ def train(args):
         generator.load_state_dict(load_checkpoint(args.init_generator, args.out)["generator"])
     del checkpoint
 
+    # Keep the underlying modules for single-image validation and portable checkpoints.
+    training_generator = generator
+    training_discriminator = discriminator
+    if args.data_parallel:
+        training_generator = torch.nn.DataParallel(generator)
+        if discriminator is not None:
+            training_discriminator = torch.nn.DataParallel(discriminator)
+
     schedules = BatchSchedule(len(train_pairs), args.batch_size, args.seed, start, stop)
     loader = DataLoader(TrainPatches(train_pairs), batch_sampler=schedules, num_workers=args.workers,
                         pin_memory=device.type == "cuda", generator=torch.Generator().manual_seed(args.seed))
@@ -220,6 +232,7 @@ def train(args):
     config = {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}
     config.update(total_steps=stop, steps_per_epoch=steps_per_epoch, device_used=str(device))
     if device.type == "cuda":
+        config["training_gpu_count"] = gpu_count if args.data_parallel else 1
         config["gpu_name"] = torch.cuda.get_device_name(device)
         torch.cuda.reset_peak_memory_stats(device)
     (args.out / f"config-from-step-{start}.json").write_text(json.dumps(config, indent=2))
@@ -242,7 +255,7 @@ def train(args):
                 if opt:
                     for group in opt.param_groups:
                         group["lr"] = rate
-            losses = update_batch(generator, discriminator, vgg, opt_g, opt_d,
+            losses = update_batch(training_generator, training_discriminator, vgg, opt_g, opt_d,
                                   lr_image.to(device), target.to(device), args)
             values = {"train/step": step}
             if step % args.log_every == 0 or step in (start + 1, stop):

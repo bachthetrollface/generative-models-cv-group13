@@ -150,6 +150,11 @@ class PilotTests(unittest.TestCase):
                 self.assertEqual(flags[flags.index("--val-every") + 1], "50")
                 self.assertIn("--lpips", flags)
                 self.assertEqual(flags[flags.index("--device") + 1], "cuda")
+            dp_cnn, = commands("pilot_srresnet.sh", "--data-parallel", RUN_ROOT=tmp)
+            dp_warmup, dp_gan = commands("pilot_srgan.sh", "--data-parallel", RUN_ROOT=tmp)
+            for flags in (dp_cnn, dp_warmup, dp_gan):
+                self.assertIn("--data-parallel", flags)
+                self.assertEqual(flags[flags.index("--batch-size") + 1], "16")
             pretrain_dir = Path(warmup[warmup.index("--out") + 1])
             self.assertNotEqual(cnn[cnn.index("--out") + 1], str(pretrain_dir))
             self.assertEqual(warmup[warmup.index("--steps") + 1], "200")

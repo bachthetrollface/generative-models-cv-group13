@@ -20,9 +20,20 @@ bash scripts/pilot_srresnet.sh
 bash scripts/pilot_srgan.sh
 ```
 
-The pilot scripts default to CUDA and use one T4 per process. Set `PRETRAIN_STEPS` to adjust the GAN’s private pretraining budget. The launcher resumes an interrupted pretraining stage automatically. Setting `GENERATOR` uses an explicitly supplied checkpoint, and `RESUME` continues an existing GAN directly. Choose a GPU with `CUDA_VISIBLE_DEVICES=0`. The trainer records GPU name, peak PyTorch memory allocation, and update time. Batch size 16 is the paper setting. If memory requires a smaller batch, set the same `BATCH_SIZE` for both pilots and record the change. The scripts honor `PYTHON`, `DATA_ROOT`, `RUN_ROOT`, `DEVICE`, `WORKERS`, `BATCH_SIZE`, `STEPS`, `EPOCHS`, and the standard W&B project and entity variables. The first VGG-based run downloads the torchvision VGG19 weights into `.cache/torch`. [PyTorch wheels](https://pytorch.org/get-started/previous-versions/)
+The pilot scripts default to CUDA and use one T4 per process by default. Set `PRETRAIN_STEPS` to adjust the GAN’s private pretraining budget. The launcher resumes an interrupted pretraining stage automatically. Setting `GENERATOR` uses an explicitly supplied checkpoint, and `RESUME` continues an existing GAN directly. Choose a GPU with `CUDA_VISIBLE_DEVICES=0`. The trainer records GPU name, peak PyTorch memory allocation, and update time. Batch size 16 is the paper setting. If memory requires a smaller batch, set the same `BATCH_SIZE` for both pilots and record the change. The scripts honor `PYTHON`, `DATA_ROOT`, `RUN_ROOT`, `DEVICE`, `WORKERS`, `BATCH_SIZE`, `STEPS`, `EPOCHS`, and the standard W&B project and entity variables. The first VGG-based run downloads the torchvision VGG19 weights into `.cache/torch`. [PyTorch wheels](https://pytorch.org/get-started/previous-versions/)
 
 The download script fetches the official training HR and bicubic ×4 PNG archives. Existing extracted data can be used by setting `DATA_ROOT` to the directory containing `DIV2K_train_HR/0001.png` and `DIV2K_train_LR_bicubic/X4/0001x4.png`. We split the 800 training IDs into 750 for training and 50 for internal validation with seed 5413. Every run writes its split to `split.json`. The official validation IDs 0801–0900 and Urban100 remain available as project test sets. [DIV2K](https://data.vision.ee.ethz.ch/cvl/DIV2K/)
+
+## Train a single experiment on two T4s
+
+On a machine with two T4s, select both devices and pass `--data-parallel` to the experiment you want to run.
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 bash scripts/pilot_srresnet.sh --data-parallel
+CUDA_VISIBLE_DEVICES=0,1 bash scripts/pilot_srgan.sh --data-parallel
+```
+
+Each command runs one process. The default global batch of 16 splits into eight images per GPU. SRGAN uses both GPUs for its private generator pretraining and adversarial stage. BatchNorm computes statistics per replica, so results can differ from a single-GPU batch of 16. Validation, optional VGG feature loss, W&B logging, and checkpoint writing use the primary GPU or host process. Checkpoint parameter names are compatible with single-GPU evaluation and resume. The logged peak GPU memory is for the primary GPU.
 
 ## What the pilot measures
 
