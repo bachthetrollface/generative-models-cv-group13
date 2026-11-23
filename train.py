@@ -167,7 +167,7 @@ def resume_history(path, step):
 
 
 def train(args):
-    train_pairs, valid_pairs = training_split(args.data, seed=5413, val_count=50)
+    train_pairs, valid_pairs = training_split(args.data)
     steps_per_epoch = len(train_pairs) // args.batch_size
     if not steps_per_epoch:
         raise ValueError("Batch size exceeds the number of training images.")

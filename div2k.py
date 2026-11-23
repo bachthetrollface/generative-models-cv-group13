@@ -22,13 +22,30 @@ def image_pairs(hr_dir, lr_dir):
     return [(key, hr[key], lr[key]) for key in sorted(hr)]
 
 
-def training_split(root, seed, val_count):
+SPLIT_FILE = Path(__file__).resolve().parent / "splits" / "div2k_train_val.txt"
+
+
+def training_split(root):
     pairs = image_pairs(root / "DIV2K_train_HR", root / "DIV2K_train_LR_bicubic" / "X4")
     expected = {f"{i:04d}" for i in range(1, 801)}
     if {p[0] for p in pairs} != expected:
         raise ValueError("Expected all 800 official DIV2K train IDs 0001–0800.")
-    valid_ids = set(random.Random(seed).sample([p[0] for p in pairs], val_count))
-    return [p for p in pairs if p[0] not in valid_ids], [p for p in pairs if p[0] in valid_ids]
+
+    assignments = {}
+    for number, line in enumerate(SPLIT_FILE.read_text(encoding="utf-8").splitlines(), 1):
+        fields = line.partition("#")[0].split()
+        if not fields:
+            continue
+        if len(fields) != 2 or fields[0] not in ("train", "validation"):
+            raise ValueError(f"{SPLIT_FILE}:{number}: expected a split name and image ID")
+        split, image_id = fields
+        if image_id not in expected or image_id in assignments:
+            raise ValueError(f"{SPLIT_FILE}:{number}: unknown or duplicate image ID {image_id}")
+        assignments[image_id] = split
+    if assignments.keys() != expected or list(assignments.values()).count("validation") != 50:
+        raise ValueError(f"{SPLIT_FILE} must assign all 800 IDs to 750 training and 50 validation images.")
+    return ([p for p in pairs if assignments[p[0]] == "train"],
+            [p for p in pairs if assignments[p[0]] == "validation"])
 
 
 def read_pair(pair, crop_lr=0, rng=None):
