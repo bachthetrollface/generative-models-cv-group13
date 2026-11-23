@@ -168,24 +168,28 @@ def resume_history(path, step):
 
 def train(args):
     train_pairs, valid_pairs = training_split(args.data)
-    steps_per_epoch = len(train_pairs) // args.batch_size
-    if not steps_per_epoch:
-        raise ValueError("Batch size exceeds the number of training images.")
-    stop = args.steps
-    if args.epochs is not None:
-        stop = args.epochs * steps_per_epoch
-    if stop is None:
-        stop = 200_000 if args.stage == "srgan" else 1_000_000
+    steps_per_epoch = math.ceil(len(train_pairs) / args.batch_size)
     settings = {k: getattr(args, k) for k in (
         "stage", "batch_size", "seed", "lr", "lr_drop_step", "pixel_weight",
         "vgg_weight", "vgg_layer", "adv_weight")}
     split = {"train": [p[0] for p in train_pairs], "validation": [p[0] for p in valid_pairs]}
     checkpoint = load_checkpoint(args.resume, args.out) if args.resume else None
     start = 0
+    sampler_offset = 0
     if checkpoint:
         if checkpoint["settings"] != settings or checkpoint["split"] != split:
             raise ValueError("Resume settings or DIV2K split changed. Use --init-generator for a new experiment.")
         start = checkpoint["step"]
+        if "sampler_offset" in checkpoint:
+            sampler_offset = checkpoint["sampler_offset"]
+        elif len(train_pairs) % args.batch_size:
+            # Older checkpoints skipped one tail batch per completed epoch.
+            sampler_offset = start // (len(train_pairs) // args.batch_size)
+    stop = args.steps
+    if args.epochs is not None:
+        stop = args.epochs * steps_per_epoch - sampler_offset
+    if stop is None:
+        stop = 200_000 if args.stage == "srgan" else 1_000_000
     existing = args.out / "latest.pt"
     if args.resume and existing.is_file() and Path(args.resume).resolve() == existing.resolve() and stop == start:
         print(f"Checkpoint already reached {stop} updates: {existing}")
@@ -225,7 +229,7 @@ def train(args):
         if discriminator is not None:
             training_discriminator = torch.nn.DataParallel(discriminator)
 
-    schedules = BatchSchedule(len(train_pairs), args.batch_size, args.seed, start, stop)
+    schedules = BatchSchedule(len(train_pairs), args.batch_size, args.seed, start + sampler_offset, stop + sampler_offset)
     loader = DataLoader(TrainPatches(train_pairs), batch_sampler=schedules, num_workers=args.workers,
                         pin_memory=device.type == "cuda", generator=torch.Generator().manual_seed(args.seed))
     (args.out / "split.json").write_text(json.dumps(split, indent=2))
@@ -260,7 +264,7 @@ def train(args):
             values = {"train/step": step}
             if step % args.log_every == 0 or step in (start + 1, stop):
                 values.update({f"train/{k}": v for k, v in losses.items()})
-                values.update({"train/lr": rate, "train/epoch": step / steps_per_epoch})
+                values.update({"train/lr": rate, "train/epoch": (step + sampler_offset) / steps_per_epoch})
                 values["train/update_seconds"] = time.perf_counter() - batch_start
                 if device.type == "cuda":
                     values["train/peak_gpu_gib"] = torch.cuda.max_memory_allocated(device) / 2**30
@@ -272,7 +276,7 @@ def train(args):
                 values.update({f"val/{k}": v for k, v in scores.items()})
             if step % args.save_every == 0 or step == stop:
                 state = dict(format_version=1, stage=args.stage, settings=settings, config=config, split=split,
-                             step=step, run_id=run_id, generator=generator.state_dict(),
+                             step=step, sampler_offset=sampler_offset, run_id=run_id, generator=generator.state_dict(),
                              opt_g=opt_g.state_dict(), cpu_rng=torch.get_rng_state(),
                              cuda_rng=torch.cuda.get_rng_state(device) if device.type == "cuda" else None,
                              mps_rng=torch.mps.get_rng_state() if device.type == "mps" else None,

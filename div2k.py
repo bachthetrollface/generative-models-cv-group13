@@ -1,4 +1,5 @@
 """Pair original image IDs first, then sample aligned ×4 crops."""
+import math
 import random
 from pathlib import Path
 
@@ -96,7 +97,7 @@ class BatchSchedule:
         self.start, self.stop = start, stop
 
     def __iter__(self):
-        per_epoch = self.size // self.batch_size
+        per_epoch = math.ceil(self.size / self.batch_size)
         current_epoch = None
         for step in range(self.start, self.stop):
             epoch, batch = divmod(step, per_epoch)

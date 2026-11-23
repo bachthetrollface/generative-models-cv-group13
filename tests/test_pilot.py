@@ -77,7 +77,11 @@ class PilotTests(unittest.TestCase):
             np.testing.assert_array_equal(np.asarray(hr)[::4, ::4], lr)
         schedule = list(BatchSchedule(750, 16, 5413, 0, 50))
         self.assertEqual(schedule[43:], list(BatchSchedule(750, 16, 5413, 43, 50)))
-        self.assertEqual(len({key for batch in schedule[:46] for key, _ in batch}), 46 * 16)
+        self.assertEqual([len(batch) for batch in schedule[:47]], [16] * 46 + [14])
+        self.assertEqual({key for batch in schedule[:47] for key, _ in batch}, set(range(750)))
+        self.assertEqual(schedule[46:], list(BatchSchedule(750, 16, 5413, 46, 50)))
+        self.assertEqual(schedule[47:], list(BatchSchedule(750, 16, 5413, 47, 50)))
+        self.assertEqual([len(batch) for batch in BatchSchedule(3, 16, 0, 0, 2)], [3, 3])
 
     def test_luminance_metrics_and_border(self):
         target = torch.rand(3, 32, 32)

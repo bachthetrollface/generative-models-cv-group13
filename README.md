@@ -64,7 +64,7 @@ STEPS=500 RESUME=runs/t4-pilot/srresnet/latest.pt bash scripts/pilot_srresnet.sh
 EPOCHS=10 RESUME=runs/t4-pilot/srgan/latest.pt bash scripts/pilot_srgan.sh
 ```
 
-An epoch is one shuffled pass over the training IDs with the incomplete batch dropped (46 updates at batch size 16). Each sampled image gets a fresh crop each epoch. Changing the SRResNet checkpoint after a GAN starts has no effect on a resumed GAN. To initialize a fresh GAN from an extended SRResNet, select a new `RUN_ROOT` and set `GENERATOR` to that checkpoint. On another machine, set `RESUME=wandb://ENTITY/PROJECT/ARTIFACT:latest` with an authenticated account and a fresh output directory. Online resumes reuse the saved W&B run ID within the same project and entity. Offline resumes write separate W&B segments.
+Each epoch uses all 750 training images once. With a batch size of 16, it takes 47 updates: 46 batches of 16 and one batch of 14. Each sampled image gets a fresh crop each epoch. Changing the SRResNet checkpoint after a GAN starts has no effect on a resumed GAN. To initialize a fresh GAN from an extended SRResNet, select a new `RUN_ROOT` and set `GENERATOR` to that checkpoint. On another machine, set `RESUME=wandb://ENTITY/PROJECT/ARTIFACT:latest` with an authenticated account and a fresh output directory. Online resumes reuse the saved W&B run ID within the same project and entity. Offline resumes write separate W&B segments.
 
 ## Evaluate full images
 
