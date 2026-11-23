@@ -3,7 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 root=${DATA_ROOT:-data}
 mkdir -p "$root"
-for name in DIV2K_train_HR DIV2K_train_LR_bicubic_X4; do
+for name in DIV2K_train_HR DIV2K_train_LR_bicubic_X4 DIV2K_valid_HR DIV2K_valid_LR_bicubic_X4; do
   zip="$root/$name.zip"
   if [[ ! -f "$zip" ]]; then
     curl --fail --location --retry 3 --continue-at - \
