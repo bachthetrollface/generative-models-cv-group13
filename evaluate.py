@@ -10,7 +10,7 @@ import torch
 from PIL import Image, ImageDraw
 from torch.nn import functional as F
 
-from div2k import bgr_tensor, image_pairs, read_pair
+from div2k import DIV2K_SUBSETS, bgr_tensor, div2k_pairs, image_pairs, read_pair
 from models import SRResNet
 
 
@@ -106,26 +106,54 @@ def evaluate(generator, pairs, device, crop_lr=0, preview=None, perceptual=None,
     return {k: float(np.mean([row[k] for row in rows])) for k in rows[0] if k != "id"}, rows
 
 
-if __name__ == "__main__":
+def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--hr", type=Path, required=True)
-    p.add_argument("--lr", type=Path, required=True)
+    div2k_test_sets = {f"div2k-{subset}": subset for subset in DIV2K_SUBSETS}
+    p.add_argument("--test-sets", nargs="+", action="extend", choices=[*div2k_test_sets, "urban100"],
+                   help="Evaluate named test sets and save each under its own output directory")
+    p.add_argument("--data", type=Path, default=Path("data"), help="Root directory for named test sets")
+    p.add_argument("--hr", type=Path, help="HR directory for a custom test set")
+    p.add_argument("--lr", type=Path, help="LR directory for a custom test set")
     p.add_argument("--checkpoint", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--device", default="auto")
     p.add_argument("--lpips", action=argparse.BooleanOptionalAction, default=True)
     args = p.parse_args()
+
+    if args.test_sets and (args.hr is not None or args.lr is not None):
+        p.error("Use --test-sets or a custom --hr and --lr pair.")
+    if not args.test_sets and (args.hr is None or args.lr is None):
+        p.error("Supply --test-sets or both --hr and --lr.")
+
+    try:
+        if args.test_sets:
+            jobs = []
+            for name in dict.fromkeys(args.test_sets):
+                if name == "urban100":
+                    pairs = image_pairs(args.data / "Urban100_HR", args.data / "Urban100_LR_x4")
+                else:
+                    pairs = div2k_pairs(args.data, "valid", div2k_test_sets[name])
+                jobs.append((name, pairs, args.output / name))
+        else:
+            jobs = [(None, image_pairs(args.hr, args.lr), args.output)]
+    except ValueError as exc:
+        p.error(str(exc))
+
     device = device_for(args.device)
     generator = SRResNet().to(device)
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
     generator.load_state_dict(checkpoint["generator"])
-    scores, rows = evaluate(generator, image_pairs(args.hr, args.lr), device,
-                            preview=args.output / "preview.png",
-                            perceptual=make_lpips(device) if args.lpips else None,
-                            sr_dir=args.output / "sr")
-    with (args.output / "per-image.csv").open("w", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=list(rows[0]))
-        writer.writeheader()
-        writer.writerows(rows)
-    (args.output / "mean-scores.json").write_text(json.dumps(scores, indent=2))
-    print(scores)
+    perceptual = make_lpips(device) if args.lpips else None
+    for name, pairs, output in jobs:
+        scores, rows = evaluate(generator, pairs, device, preview=output / "preview.png",
+                                perceptual=perceptual, sr_dir=output / "sr")
+        with (output / "per-image.csv").open("w", newline="") as file:
+            writer = csv.DictWriter(file, fieldnames=list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+        (output / "mean-scores.json").write_text(json.dumps(scores, indent=2))
+        print(f"{name} {scores}" if name else scores, flush=True)
+
+
+if __name__ == "__main__":
+    main()

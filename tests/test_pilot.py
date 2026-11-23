@@ -1,3 +1,5 @@
+import csv
+import json
 import os
 import subprocess
 import tempfile
@@ -11,8 +13,8 @@ import torch
 from PIL import Image
 from torch import nn
 
-from div2k import BatchSchedule, image_pairs, read_pair
-from evaluate import y_metrics
+from div2k import BatchSchedule, image_pairs, read_pair, training_split
+from evaluate import main as evaluate_main, y_metrics
 from models import Discriminator, SRResNet, VGGContent
 from train import (
     arguments, learning_rate, load_checkpoint, optimizer, restore_training_state,
@@ -88,6 +90,58 @@ class PilotTests(unittest.TestCase):
         altered = target.clone()
         altered[:, :4] = 0
         self.assertEqual(y_metrics(altered, target), (float("inf"), 1.0))
+
+    def test_wild_variants_stay_with_their_hr_split(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            hr, lr = root / "DIV2K_train_HR", root / "DIV2K_train_LR_wild"
+            hr.mkdir()
+            lr.mkdir()
+            for index in range(1, 801):
+                (hr / f"{index:04}.png").touch()
+                for variant in range(1, 5):
+                    (lr / f"{index:04}x4w{variant}.png").touch()
+            train, validation = training_split(root, "realistic-wild")
+            train_ids = {pair[1].stem for pair in train}
+            validation_ids = {pair[1].stem for pair in validation}
+            self.assertEqual((len(train), len(validation)), (3000, 200))
+            self.assertEqual((len(train_ids), len(validation_ids)), (750, 50))
+            self.assertFalse(train_ids & validation_ids)
+            self.assertEqual(len({pair[0] for pair in train + validation}), 3200)
+
+    def test_named_evaluation_writes_separate_results_for_each_track(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cases = {
+                "div2k-bicubic": ("DIV2K_valid_HR", "DIV2K_valid_LR_bicubic/X4", "0801", "x4"),
+                "div2k-unknown": ("DIV2K_valid_HR", "DIV2K_valid_LR_unknown/X4", "0801", "x4"),
+                "div2k-realistic-mild": ("DIV2K_valid_HR", "DIV2K_valid_LR_mild", "0801", "x4m"),
+                "div2k-realistic-difficult": ("DIV2K_valid_HR", "DIV2K_valid_LR_difficult", "0801", "x4d"),
+                "div2k-realistic-wild": ("DIV2K_valid_HR", "DIV2K_valid_LR_wild", "0801", "x4w"),
+                "urban100": ("Urban100_HR", "Urban100_LR_x4", "img_001", ""),
+            }
+            for index, (hr, lr, key, suffix) in enumerate(cases.values()):
+                (root / hr).mkdir(parents=True, exist_ok=True)
+                (root / lr).mkdir(parents=True)
+                Image.new("RGB", (24, 32), "white").save(root / hr / f"{key}.png")
+                Image.new("RGB", (6, 8), (index * 32,) * 3).save(root / lr / f"{key}{suffix}.png")
+            output, checkpoint = root / "results", root / "checkpoint.pt"
+            torch.save({"generator": {}}, checkpoint)
+            argv = ["evaluate.py", "--test-sets", *cases, "--data", str(root),
+                    "--output", str(output), "--checkpoint", str(checkpoint), "--device", "cpu", "--no-lpips"]
+            with (patch("sys.argv", argv), patch("builtins.print"),
+                  patch("evaluate.SRResNet", return_value=nn.Upsample(scale_factor=4)) as create_model):
+                evaluate_main()
+            create_model.assert_called_once()
+            self.assertEqual({folder.name for folder in output.iterdir()}, set(cases))
+            for name, (_, _, key, _) in cases.items():
+                result = output / name
+                with (result / "per-image.csv").open() as file:
+                    self.assertEqual([row["id"] for row in csv.DictReader(file)], [key])
+                self.assertIn("sr_psnr_y", json.loads((result / "mean-scores.json").read_text()))
+                self.assertTrue((result / "preview.png").is_file())
+                with Image.open(result / "sr" / f"{key}.png") as image:
+                    self.assertEqual(image.size, (24, 32))
 
     def test_independent_loss_switches(self):
         x, target = torch.ones(1, 3, 3, 3), torch.zeros(1, 3, 3, 3)
@@ -170,6 +224,9 @@ class PilotTests(unittest.TestCase):
             retry, _ = commands("pilot_srgan.sh", "--no-lpips", RUN_ROOT=tmp)
             self.assertEqual(retry[retry.index("--resume") + 1], checkpoint)
             self.assertIn("--no-lpips", retry)
+            subset_warmup, subset_gan = commands("pilot_srgan.sh", "--div2k-subset", "unknown", RUN_ROOT=tmp)
+            for flags in (subset_warmup, subset_gan):
+                self.assertEqual(flags[-2:], ["--div2k-subset", "unknown"])
             custom, = commands("pilot_srgan.sh", GENERATOR="my.pt", VAL_EVERY="5")
             self.assertEqual(custom[custom.index("--val-every") + 1], "5")
             self.assertEqual(custom[custom.index("--init-generator") + 1], "my.pt")

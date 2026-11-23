@@ -13,7 +13,7 @@ from torch.nn import functional as F
 from torch.utils.data import DataLoader
 import wandb
 
-from div2k import BatchSchedule, TrainPatches, training_split
+from div2k import DIV2K_SUBSETS, BatchSchedule, TrainPatches, training_split
 from evaluate import device_for, evaluate, make_lpips
 from models import Discriminator, SRResNet, VGGContent
 
@@ -22,6 +22,8 @@ def arguments():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     p.add_argument("--stage", choices=["srresnet", "srgan"], required=True)
     p.add_argument("--data", type=Path, default=Path("data"))
+    p.add_argument("--div2k-subset", choices=DIV2K_SUBSETS, default="bicubic",
+                   help="DIV2K ×4 degradation track")
     p.add_argument("--out", type=Path, required=True)
     start = p.add_mutually_exclusive_group()
     start.add_argument("--resume", help="Full checkpoint path or wandb://entity/project/artifact:alias")
@@ -167,17 +169,20 @@ def resume_history(path, step):
 
 
 def train(args):
-    train_pairs, valid_pairs = training_split(args.data)
+    train_pairs, valid_pairs = training_split(args.data, args.div2k_subset)
+    valid_ids = set(list(dict.fromkeys(pair[1].stem for pair in valid_pairs))[:args.val_images])
+    validation_sample = [pair for pair in valid_pairs if pair[1].stem in valid_ids]
     steps_per_epoch = math.ceil(len(train_pairs) / args.batch_size)
     settings = {k: getattr(args, k) for k in (
         "stage", "batch_size", "seed", "lr", "lr_drop_step", "pixel_weight",
-        "vgg_weight", "vgg_layer", "adv_weight")}
+        "vgg_weight", "vgg_layer", "adv_weight", "div2k_subset")}
     split = {"train": [p[0] for p in train_pairs], "validation": [p[0] for p in valid_pairs]}
     checkpoint = load_checkpoint(args.resume, args.out) if args.resume else None
     start = 0
     sampler_offset = 0
     if checkpoint:
-        if checkpoint["settings"] != settings or checkpoint["split"] != split:
+        saved_settings = {"div2k_subset": "bicubic", **checkpoint["settings"]}
+        if saved_settings != settings or checkpoint["split"] != split:
             raise ValueError("Resume settings or DIV2K split changed. Use --init-generator for a new experiment.")
         start = checkpoint["step"]
         if "sampler_offset" in checkpoint:
@@ -271,7 +276,7 @@ def train(args):
             preview = None
             if step % args.val_every == 0 or step == stop:
                 preview = args.out / "previews" / f"step-{step:07d}.png"
-                scores, _ = evaluate(generator, valid_pairs[:args.val_images], device,
+                scores, _ = evaluate(generator, validation_sample, device,
                                      args.val_crop_lr, preview, perceptual)
                 values.update({f"val/{k}": v for k, v in scores.items()})
             if step % args.save_every == 0 or step == stop:

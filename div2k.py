@@ -9,11 +9,25 @@ from PIL import Image
 from torch.utils.data import Dataset
 
 
-def image_pairs(hr_dir, lr_dir):
+DIV2K_SUBSETS = {
+    "bicubic": ("bicubic", "x4"),
+    "unknown": ("unknown", "x4"),
+    "realistic-mild": ("mild", "x4m"),
+    "realistic-difficult": ("difficult", "x4d"),
+    "realistic-wild": ("wild", "x4w"),
+}
+SPLIT_FILE = Path(__file__).resolve().parent / "splits" / "div2k_train_val.txt"
+
+
+def image_pairs(hr_dir, lr_dir, *, lr_suffix="x4", variants=()):
     hr = {p.stem: p for p in sorted(Path(hr_dir).glob("*.png"))}
+    if variants:
+        hr = {f"{key}{lr_suffix}{variant}": path
+              for key, path in hr.items() for variant in variants}
+        lr_suffix = ""
     lr = {}
     for path in sorted(Path(lr_dir).glob("*.png")):
-        key = path.stem.removesuffix("x4")
+        key = path.stem.removesuffix(lr_suffix)
         if key in lr:
             raise ValueError(f"Duplicate LR ID {key} in {lr_dir}")
         lr[key] = path
@@ -23,13 +37,20 @@ def image_pairs(hr_dir, lr_dir):
     return [(key, hr[key], lr[key]) for key in sorted(hr)]
 
 
-SPLIT_FILE = Path(__file__).resolve().parent / "splits" / "div2k_train_val.txt"
+def div2k_pairs(root, split, subset):
+    track, suffix = DIV2K_SUBSETS[subset]
+    hr_dir = root / f"DIV2K_{split}_HR"
+    lr_dir = root / f"DIV2K_{split}_LR_{track}"
+    if subset in ("bicubic", "unknown"):
+        lr_dir /= "X4"
+    variants = range(1, 5) if subset == "realistic-wild" and split == "train" else ()
+    return image_pairs(hr_dir, lr_dir, lr_suffix=suffix, variants=variants)
 
 
-def training_split(root):
-    pairs = image_pairs(root / "DIV2K_train_HR", root / "DIV2K_train_LR_bicubic" / "X4")
+def training_split(root, subset="bicubic"):
+    pairs = div2k_pairs(root, "train", subset)
     expected = {f"{i:04d}" for i in range(1, 801)}
-    if {p[0] for p in pairs} != expected:
+    if {hr_path.stem for _, hr_path, _ in pairs} != expected:
         raise ValueError("Expected all 800 official DIV2K train IDs 0001–0800.")
 
     assignments = {}
@@ -45,15 +66,15 @@ def training_split(root):
         assignments[image_id] = split
     if assignments.keys() != expected or list(assignments.values()).count("validation") != 50:
         raise ValueError(f"{SPLIT_FILE} must assign all 800 IDs to 750 training and 50 validation images.")
-    return ([p for p in pairs if assignments[p[0]] == "train"],
-            [p for p in pairs if assignments[p[0]] == "validation"])
+    return ([p for p in pairs if assignments[p[1].stem] == "train"],
+            [p for p in pairs if assignments[p[1].stem] == "validation"])
 
 
 def read_pair(pair, crop_lr=0, rng=None):
     key, hr_path, lr_path = pair
     with Image.open(hr_path) as hr, Image.open(lr_path) as lr:
         w, h = lr.size
-        # Official LR images correspond to HR cropped to a multiple of four.
+        # Use the nominal ×4 grid, cropping the HR dimensions to a multiple of four.
         if hr.width // 4 != w or hr.height // 4 != h:
             raise ValueError(f"Misaligned ×4 pair {key}: HR {hr.size}, LR {lr.size}")
         width, height = w, h

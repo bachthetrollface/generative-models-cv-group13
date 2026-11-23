@@ -13,8 +13,18 @@ else
   if [[ -f "$pretrain_dir/latest.pt" ]]; then
     pretrain_args+=(--resume "$pretrain_dir/latest.pt")
   fi
-  for arg in "$@"; do
-    case "$arg" in --lpips|--no-lpips|--data-parallel) pretrain_args+=("$arg");; esac
+  for ((i = 1; i <= $#; i++)); do
+    arg=${!i}
+    case "$arg" in
+      --lpips|--no-lpips|--data-parallel|--div2k-subset=*) pretrain_args+=("$arg") ;;
+      --div2k-subset)
+        pretrain_args+=("$arg")
+        if ((i < $#)); then
+          i=$((i + 1))
+          pretrain_args+=("${!i}")
+        fi
+        ;;
+    esac
   done
   "$python_bin" train.py "${common[@]}" "${pretrain_args[@]}"
   start=(--init-generator "$pretrain_dir/latest.pt")
