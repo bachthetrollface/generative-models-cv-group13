@@ -70,7 +70,7 @@ Each epoch uses all 750 training images once. With a batch size of 16, it takes 
 
 Run `bash scripts/download_urban100.sh` to fetch the 100 Urban100 HR and bicubic ×4 LR pairs. It uses `DATA_ROOT` (default `data`) and extracts the images into `Urban100_HR/` and `Urban100_LR_x4/`, ready for the command below. [Urban100 archives](https://huggingface.co/datasets/eugenesiow/Urban100/tree/57309de03db02ac12ee09ad6127e7b815c211328/data)
 
-Point the evaluator at the project test pairs after selecting checkpoints. It writes a per-image CSV, mean scores, and a visual comparison. Repeat for each stage and dataset in a separate output directory. HR names such as `0801.png` or `img_001.png` pair with LR names using the same stem or an additional `x4` suffix.
+Point the evaluator at the project test pairs after selecting checkpoints. It saves every generated image as an 8-bit RGB PNG in `sr/` under `--output`, along with a per-image CSV, mean scores, and a comparison preview. Each PNG is four times the LR width and height and uses the HR image ID as its filename. Use a separate output directory for each stage and dataset. HR names such as `0801.png` or `img_001.png` pair with LR names using the same stem or an additional `x4` suffix.
 
 ```bash
 python evaluate.py --checkpoint runs/t4-pilot/srgan/latest.pt \

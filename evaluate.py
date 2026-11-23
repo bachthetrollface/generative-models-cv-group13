@@ -75,8 +75,10 @@ def make_lpips(device):
 
 
 @torch.inference_mode()
-def evaluate(generator, pairs, device, crop_lr=0, preview=None, perceptual=None):
+def evaluate(generator, pairs, device, crop_lr=0, preview=None, perceptual=None, *, sr_dir=None):
     generator.eval()
+    if sr_dir is not None:
+        sr_dir.mkdir(parents=True, exist_ok=True)
     rows = []
     for index, pair in enumerate(pairs):
         lr, hr = read_pair(pair, crop_lr=crop_lr)
@@ -94,8 +96,13 @@ def evaluate(generator, pairs, device, crop_lr=0, preview=None, perceptual=None)
                     return image[None, :, 4:-4, 4:-4] * 2 - 1
                 row[f"{name}_lpips"] = perceptual(scaled(rgb), scaled(target)).item()
         rows.append(row)
-        if index == 0 and preview:
-            save_preview(preview, [("Bicubic", reference), ("Model", to_image(prediction)), ("HR", hr)])
+        show_preview = index == 0 and preview is not None
+        if sr_dir is not None or show_preview:
+            sr_image = to_image(prediction)
+            if sr_dir is not None:
+                sr_image.save(sr_dir / f"{pair[0]}.png")
+            if show_preview:
+                save_preview(preview, [("Bicubic", reference), ("Model", sr_image), ("HR", hr)])
     return {k: float(np.mean([row[k] for row in rows])) for k in rows[0] if k != "id"}, rows
 
 
@@ -114,7 +121,8 @@ if __name__ == "__main__":
     generator.load_state_dict(checkpoint["generator"])
     scores, rows = evaluate(generator, image_pairs(args.hr, args.lr), device,
                             preview=args.output / "preview.png",
-                            perceptual=make_lpips(device) if args.lpips else None)
+                            perceptual=make_lpips(device) if args.lpips else None,
+                            sr_dir=args.output / "sr")
     with (args.output / "per-image.csv").open("w", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=list(rows[0]))
         writer.writeheader()
