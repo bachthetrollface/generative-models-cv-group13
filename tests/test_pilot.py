@@ -16,10 +16,7 @@ from torch import nn
 from div2k import BatchSchedule, image_pairs, read_pair, training_split
 from evaluate import main as evaluate_main, y_metrics
 from models import Discriminator, SRResNet, VGGContent
-from train import (
-    arguments, learning_rate, load_checkpoint, optimizer, restore_training_state,
-    resume_history, save_checkpoint, update_batch,
-)
+from train import arguments, learning_rate, load_checkpoint, optimizer, save_checkpoint, update_batch
 
 
 class PilotTests(unittest.TestCase):
@@ -156,42 +153,29 @@ class PilotTests(unittest.TestCase):
             expected = pixel_weight * logs.get("pixel_mse", 0) + vgg_weight * logs.get("vgg_mse", 0)
             self.assertAlmostEqual(logs["g_loss"], expected, places=5)
 
-    def test_checkpoint_resume_with_toy_networks(self):
-        # Exercise the trainer functions on tiny tensors with both Adam optimizers.
+    def test_checkpoint_contains_only_generator_parameters_and_buffers(self):
         torch.manual_seed(7)
         args = SimpleNamespace(pixel_weight=1.0, adv_weight=0.001)
         x, y = torch.randn(2, 3, 4, 4), torch.randn(2, 3, 4, 4)
-        g, d = nn.Conv2d(3, 3, 1), nn.Conv2d(3, 1, 1)
+        g = nn.Sequential(nn.Conv2d(3, 3, 1), nn.BatchNorm2d(3))
+        d = nn.Conv2d(3, 1, 1)
         opt_g, opt_d = optimizer(g, 1e-4), optimizer(d, 1e-4)
         update_batch(g, d, None, opt_g, opt_d, x, y, args)
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
-            run = Mock()
-            state = dict(stage="srgan", step=1, run_id="unit", cpu_rng=torch.get_rng_state(),
-                         generator=g.state_dict(), discriminator=d.state_dict(),
-                         opt_g=opt_g.state_dict(), opt_d=opt_d.state_dict())
+            run = Mock(id="unit")
             with patch.dict(os.environ, WANDB_CACHE_DIR=str(out / "cache"),
                             WANDB_DATA_DIR=str(out / "staging")):
-                save_checkpoint(out, state, run)
+                save_checkpoint(out, g, run, stage="srgan", step=1)
             run.log_artifact.assert_called_once()
             self.assertEqual(run.log_artifact.call_args.kwargs["aliases"], ["latest", "step-1"])
-            self.assertIn("training.pt", run.log_artifact.call_args.args[0].manifest.entries)
+            artifact = run.log_artifact.call_args.args[0]
+            self.assertEqual(artifact.name, "srgan-unit")
+            self.assertEqual(artifact.metadata, {"step": 1, "stage": "srgan"})
+            self.assertEqual(set(artifact.manifest.entries), {"training.pt"})
             saved = load_checkpoint(str(out / "latest.pt"), out)
-            expected = update_batch(g, d, None, opt_g, opt_d, x, y, args)
-            other_g, other_d = nn.Conv2d(3, 3, 1), nn.Conv2d(3, 1, 1)
-            other_g_opt, other_d_opt = optimizer(other_g, 1e-4), optimizer(other_d, 1e-4)
-            restore_training_state(saved, other_g, other_d, other_g_opt, other_d_opt, torch.device("cpu"))
-            replay = update_batch(other_g, other_d, None, other_g_opt, other_d_opt, x, y, args)
-            self.assertEqual(expected, replay)
-            for a, b in zip([*g.parameters(), *d.parameters()], [*other_g.parameters(), *other_d.parameters()]):
-                torch.testing.assert_close(a, b, rtol=0, atol=0)
-
-    def test_resume_discards_metrics_after_checkpoint(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            history = Path(tmp) / "metrics.jsonl"
-            history.write_bytes(b'{"train/step":1}\n{"train/step":2}\n{"partial":')
-            resume_history(history, 1)
-            self.assertEqual(history.read_bytes(), b'{"train/step":1}\n')
+            self.assertEqual(set(saved), {"generator"})
+            torch.testing.assert_close(saved["generator"], g.state_dict(), rtol=0, atol=0)
 
     def test_t4_scripts_without_launching_training(self):
         root = Path(__file__).resolve().parents[1]
@@ -221,19 +205,17 @@ class PilotTests(unittest.TestCase):
             self.assertEqual(gan[gan.index("--init-generator") + 1], checkpoint)
             pretrain_dir.mkdir()
             Path(checkpoint).touch()
-            retry, _ = commands("pilot_srgan.sh", "--no-lpips", RUN_ROOT=tmp)
-            self.assertEqual(retry[retry.index("--resume") + 1], checkpoint)
-            self.assertIn("--no-lpips", retry)
+            warmup, gan = commands("pilot_srgan.sh", "--no-lpips", RUN_ROOT=tmp)
+            for flags in (warmup, gan):
+                self.assertNotIn("--resume", flags)
+                self.assertIn("--no-lpips", flags)
             subset_warmup, subset_gan = commands("pilot_srgan.sh", "--div2k-subset", "unknown", RUN_ROOT=tmp)
             for flags in (subset_warmup, subset_gan):
                 self.assertEqual(flags[-2:], ["--div2k-subset", "unknown"])
-            custom, = commands("pilot_srgan.sh", GENERATOR="my.pt", VAL_EVERY="5")
+            custom, = commands("pilot_srgan.sh", GENERATOR="my.pt", VAL_EVERY="5", EPOCHS="10")
             self.assertEqual(custom[custom.index("--val-every") + 1], "5")
             self.assertEqual(custom[custom.index("--init-generator") + 1], "my.pt")
-            resumed, = commands("pilot_srgan.sh", EPOCHS="10", RESUME="saved.pt")
-            self.assertIn("--epochs", resumed)
-            self.assertNotIn("--init-generator", resumed)
-            self.assertIn("--resume", resumed)
+            self.assertEqual(custom[custom.index("--epochs") + 1], "10")
 
 
 if __name__ == "__main__":

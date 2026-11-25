@@ -1,4 +1,8 @@
 # Sourced by the two stage scripts after switching to the repository root.
+if [[ -n ${RESUME:-} ]]; then
+  printf '%s\n' 'Use RUN_ROOT to start a fresh run. Set GENERATOR to initialize SRGAN from saved weights.' >&2
+  exit 2
+fi
 python_bin=${PYTHON:-python3}
 if [[ -z ${PYTHON:-} && -x .venv/bin/python ]]; then python_bin=.venv/bin/python; fi
 run_root=${RUN_ROOT:-runs/t4-pilot}

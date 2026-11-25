@@ -20,7 +20,7 @@ bash scripts/pilot_srresnet.sh
 bash scripts/pilot_srgan.sh
 ```
 
-The pilot scripts default to CUDA and use one T4 per process by default. Set `PRETRAIN_STEPS` to adjust the GAN’s private pretraining budget. The launcher resumes an interrupted pretraining stage automatically. Setting `GENERATOR` uses an explicitly supplied checkpoint, and `RESUME` continues an existing GAN directly. Choose a GPU with `CUDA_VISIBLE_DEVICES=0`. The trainer records GPU name, peak PyTorch memory allocation, and update time. Batch size 16 is the paper setting. If memory requires a smaller batch, set the same `BATCH_SIZE` for both pilots and record the change. The scripts honor `PYTHON`, `DATA_ROOT`, `RUN_ROOT`, `DEVICE`, `WORKERS`, `BATCH_SIZE`, `STEPS`, `EPOCHS`, and the standard W&B project and entity variables. The first VGG-based run downloads the torchvision VGG19 weights into `.cache/torch`. [PyTorch wheels](https://pytorch.org/get-started/previous-versions/)
+The pilot scripts default to CUDA and use one T4 per process by default. Set `PRETRAIN_STEPS` to adjust the GAN’s private pretraining budget or set `GENERATOR` to initialize the GAN from an existing generator checkpoint. Use a fresh `RUN_ROOT` to rerun training. Choose a GPU with `CUDA_VISIBLE_DEVICES=0`. The trainer records GPU name, peak PyTorch memory allocation, and update time. Batch size 16 is the paper setting. If memory requires a smaller batch, set the same `BATCH_SIZE` for both pilots and record the change. The scripts honor `PYTHON`, `DATA_ROOT`, `RUN_ROOT`, `DEVICE`, `WORKERS`, `BATCH_SIZE`, `STEPS`, `EPOCHS`, and the standard W&B project and entity variables. The first VGG-based run downloads the torchvision VGG19 weights into `.cache/torch`. [PyTorch wheels](https://pytorch.org/get-started/previous-versions/)
 
 The download script defaults to the official bicubic ×4 track. It accepts one or more tracks from `bicubic`, `unknown`, `realistic-mild`, `realistic-difficult`, and `realistic-wild`, and downloads the corresponding LR training and validation archives with their shared HR archives. Set `DATA_ROOT` to use a different data directory. [Official DIV2K archives](https://data.vision.ee.ethz.ch/cvl/DIV2K/#data-access)
 
@@ -42,7 +42,7 @@ CUDA_VISIBLE_DEVICES=0,1 bash scripts/pilot_srresnet.sh --data-parallel
 CUDA_VISIBLE_DEVICES=0,1 bash scripts/pilot_srgan.sh --data-parallel
 ```
 
-Each command runs one process. The default global batch of 16 splits into eight images per GPU. SRGAN uses both GPUs for its private generator pretraining and adversarial stage. BatchNorm computes statistics per replica, so results can differ from a single-GPU batch of 16. Validation, optional VGG feature loss, W&B logging, and checkpoint writing use the primary GPU or host process. Checkpoint parameter names are compatible with single-GPU evaluation and resume. The logged peak GPU memory is for the primary GPU.
+Each command runs one process. The default global batch of 16 splits into eight images per GPU. SRGAN uses both GPUs for its private generator pretraining and adversarial stage. BatchNorm computes statistics per replica, so results can differ from a single-GPU batch of 16. Validation, optional VGG feature loss, W&B logging, and checkpoint writing use the primary GPU or host process. Checkpoint parameter names are compatible with single-GPU evaluation and generator initialization. The logged peak GPU memory is for the primary GPU.
 
 ## What the pilot measures
 
@@ -55,25 +55,26 @@ Both stages use up to 16 distinct training pairs per batch, random 24×24 LR / 9
 
 LR inputs use [0, 1]. Each VGG feature tensor is divided by 12.75 before MSE. VGG receives RGB standardized for the torchvision ImageNet weights. The GAN alternates one discriminator and one generator update. We compute binary cross-entropy in logit space. Implementation choices include PyTorch initialization, per-channel PReLU, Adam β₂ = 0.999, mean loss reduction across batch and channels, and frozen discriminator running statistics during the generator update. The pilot ends before the paper's GAN learning-rate drop. [Losses and training details](https://arxiv.org/html/1609.04802v5#S2.SS2)
 
-The pilot uses the SRGAN-MSE variant from section 3.4 of the paper. For a later SRGAN-VGG54 comparison, reuse the same generator checkpoint with `RUN_ROOT=runs/gan-vgg54 GENERATOR=runs/t4-pilot/srgan-pretrain/latest.pt bash scripts/pilot_srgan.sh --pixel-weight 0 --vgg-weight 1`. Use these same loss flags when resuming an existing VGG54 run. The trainer also supports `--vgg-layer vgg22|vgg54` and `--adv-weight`. A zero weight disables that component. Calling the trainer directly without a duration uses the full schedule for the selected stage. [Paper loss variants](https://arxiv.org/html/1609.04802v5#S3.SS4)
+The pilot uses the SRGAN-MSE variant from section 3.4 of the paper. For a later SRGAN-VGG54 comparison, reuse the same generator checkpoint with `RUN_ROOT=runs/gan-vgg54 GENERATOR=runs/t4-pilot/srgan-pretrain/latest.pt bash scripts/pilot_srgan.sh --pixel-weight 0 --vgg-weight 1`. The trainer also supports `--vgg-layer vgg22|vgg54` and `--adv-weight`. A zero weight disables that component. Calling the trainer directly without a duration uses the full schedule for the selected stage. [Paper loss variants](https://arxiv.org/html/1609.04802v5#S3.SS4)
 
 ## Metrics, images, and checkpoints
 
-Under `runs/t4-pilot/`, the independent experiments write to `srresnet/` and `srgan/`. SRGAN keeps its own generator pretraining state in `srgan-pretrain/`. Read `metrics.jsonl` for step, learning rate, epoch progress, individual active losses, and discriminator real/fake scores. SRResNet and SRGAN both validate every 50 updates. Both also validate at the final update. Set `VAL_EVERY` to override the interval. Validation logs bicubic and model PSNR/SSIM on BT.601 luminance after shaving four HR pixels per edge. SSIM uses an 11×11 Gaussian window. The pilot evaluates the same eight held-out IDs on centered 256×256 HR crops and saves native-resolution bicubic/model/HR comparisons under `previews/`. These are pilot metrics. Use `--val-images 50 --val-crop-lr 0` for full-image internal validation. Validation and full-image evaluation report LPIPS-Alex v0.1 for both bicubic and model outputs by default. The metric downloads its pretrained backbone on first use. Pass `--no-lpips` to disable it.
+Under `runs/t4-pilot/`, the independent experiments write to `srresnet/` and `srgan/`. SRGAN saves its pretrained generator weights in `srgan-pretrain/`. Read `metrics.jsonl` for step, learning rate, epoch progress, individual active losses, and discriminator real/fake scores. SRResNet and SRGAN both validate every 50 updates. Both also validate at the final update. Set `VAL_EVERY` to override the interval. Validation logs bicubic and model PSNR/SSIM on BT.601 luminance after shaving four HR pixels per edge. SSIM uses an 11×11 Gaussian window. The pilot evaluates the same eight held-out IDs on centered 256×256 HR crops and saves native-resolution bicubic/model/HR comparisons under `previews/`. These are pilot metrics. Use `--val-images 50 --val-crop-lr 0` for full-image internal validation. Validation and full-image evaluation report LPIPS-Alex v0.1 for both bicubic and model outputs by default. The metric downloads its pretrained backbone on first use. Pass `--no-lpips` to disable it.
 
 The T4 scripts default to online W&B logging, including images and versioned checkpoint artifacts. Set `WANDB_PROJECT` and optionally `WANDB_ENTITY` before starting. On an offline machine, set `WANDB_MODE=offline` and skip login. To upload an offline run later, use `wandb sync <offline-run-directory>` on the directory printed by W&B and keep the local artifact staging directory until sync completes. Use `WANDB_MODE=disabled` for local checkpoints, images, and JSONL only.
 
-The trainer atomically replaces `latest.pt` at each save interval and at the final update. W&B versions contain `training.pt` and carry `latest` and `step-N` aliases. Checkpoints store both active networks (including BatchNorm buffers), Adam states, update count, sampling settings, split, RNG state, and run ID. The learning rate and next training batch are determined from the completed update. A stage initialization loads generator weights only. A resume restores the whole stage and requires the original training settings.
+The trainer atomically replaces `latest.pt` at each save interval and at the final update. The file contains only the generator parameters and buffers, including BatchNorm statistics. W&B versions contain the same weights under `training.pt` and carry `latest` and `step-N` aliases. Both new and older checkpoints can supply generator weights for evaluation or `--init-generator`.
 
 ```bash
-# Extend the pilot to 500 total SRResNet updates.
-STEPS=500 RESUME=runs/t4-pilot/srresnet/latest.pt bash scripts/pilot_srresnet.sh
+# Run a fresh SRResNet experiment for 500 updates.
+RUN_ROOT=runs/srresnet-500 STEPS=500 bash scripts/pilot_srresnet.sh
 
-# Extend the existing GAN to 10 total epochs with its own optimizer and discriminator.
-EPOCHS=10 RESUME=runs/t4-pilot/srgan/latest.pt bash scripts/pilot_srgan.sh
+# Run a fresh GAN for 10 epochs using existing pretraining weights.
+RUN_ROOT=runs/srgan-10-epochs EPOCHS=10 GENERATOR=runs/t4-pilot/srgan-pretrain/latest.pt \
+  bash scripts/pilot_srgan.sh
 ```
 
-Each epoch uses every training pair once. With a batch size of 16, the 750-pair tracks take 47 updates and wild takes 188. Each sampled pair gets a fresh crop each epoch. Changing the SRResNet checkpoint after a GAN starts has no effect on a resumed GAN. To initialize a fresh GAN from an extended SRResNet, select a new `RUN_ROOT` and set `GENERATOR` to that checkpoint. On another machine, set `RESUME=wandb://ENTITY/PROJECT/ARTIFACT:latest` with an authenticated account and a fresh output directory. Online resumes reuse the saved W&B run ID within the same project and entity. Offline resumes write separate W&B segments.
+Each epoch uses every training pair once. With a batch size of 16, the 750-pair tracks take 47 updates and wild takes 188. Each sampled pair gets a fresh crop each epoch. To initialize a fresh GAN from weights in W&B, use an authenticated account and set `GENERATOR=wandb://ENTITY/PROJECT/ARTIFACT:latest`.
 
 ## Evaluate full images
 
@@ -97,4 +98,4 @@ The realistic tracks can introduce spatial shifts and scaling. Training crops an
 
 ## Unit tests
 
-Run `python -m unittest discover -s tests -v` in the pinned environment. Tests use synthetic images and toy networks to check resume, loss settings, pairing, metrics, and launcher arguments. They do not start a training job or contact W&B.
+Run `python -m unittest discover -s tests -v` in the pinned environment. Tests use synthetic images and toy networks to check checkpoint contents, loss settings, pairing, metrics, and launcher arguments. They run locally with mocked W&B logging.

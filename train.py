@@ -25,12 +25,10 @@ def arguments():
     p.add_argument("--div2k-subset", choices=DIV2K_SUBSETS, default="bicubic",
                    help="DIV2K ×4 degradation track")
     p.add_argument("--out", type=Path, required=True)
-    start = p.add_mutually_exclusive_group()
-    start.add_argument("--resume", help="Full checkpoint path or wandb://entity/project/artifact:alias")
-    start.add_argument("--init-generator", help="Load generator weights only, from a path or wandb:// reference")
+    p.add_argument("--init-generator", help="Initialize a fresh run from generator weights, using a path or wandb:// reference")
     duration = p.add_mutually_exclusive_group()
-    duration.add_argument("--steps", type=int, help="Total stage updates, including completed updates")
-    duration.add_argument("--epochs", type=int, help="Total stage epochs, including completed epochs")
+    duration.add_argument("--steps", type=int, help="Number of stage updates")
+    duration.add_argument("--epochs", type=int, help="Number of stage epochs")
     p.add_argument("--batch-size", type=int, default=16)
     p.add_argument("--workers", type=int, default=2)
     p.add_argument("--seed", type=int, default=5413)
@@ -60,8 +58,8 @@ def arguments():
     weights = [args.pixel_weight, args.vgg_weight, args.adv_weight]
     if any(w < 0 or not math.isfinite(w) for w in weights) or not any(weights):
         p.error("Enable at least one positive loss weight. All weights must be finite and nonnegative.")
-    if gan and not (args.init_generator or args.resume):
-        p.error("SRGAN needs --init-generator from SRResNet or --resume from SRGAN.")
+    if gan and not args.init_generator:
+        p.error("SRGAN needs --init-generator to initialize the generator.")
     if min(args.batch_size, args.log_every, args.save_every, args.val_every) < 1 or args.workers < 0:
         p.error("Batch size and logging intervals must be positive, workers nonnegative.")
     if args.lr <= 0 or not math.isfinite(args.lr) or args.lr_drop_step < 0:
@@ -85,19 +83,6 @@ def optimizer(model, lr):
 
 def learning_rate(initial, drop_step, completed_steps):
     return initial * (0.1 if drop_step and completed_steps >= drop_step else 1)
-
-
-def restore_training_state(checkpoint, generator, discriminator, opt_g, opt_d, device):
-    generator.load_state_dict(checkpoint["generator"])
-    opt_g.load_state_dict(checkpoint["opt_g"])
-    if discriminator is not None:
-        discriminator.load_state_dict(checkpoint["discriminator"])
-        opt_d.load_state_dict(checkpoint["opt_d"])
-    torch.set_rng_state(checkpoint["cpu_rng"])
-    if device.type == "cuda" and checkpoint["cuda_rng"] is not None:
-        torch.cuda.set_rng_state(checkpoint["cuda_rng"], device)
-    if device.type == "mps" and checkpoint.get("mps_rng") is not None:
-        torch.mps.set_rng_state(checkpoint["mps_rng"])
 
 
 def update_batch(generator, discriminator, vgg, opt_g, opt_d, lr_image, target, args):
@@ -137,35 +122,16 @@ def update_batch(generator, discriminator, vgg, opt_g, opt_d, lr_image, target, 
     return logs
 
 
-def save_checkpoint(out, state, run):
+def save_checkpoint(out, generator, run, *, stage, step):
     path = out / "latest.pt"
     temporary = out / "latest.pt.tmp"
-    torch.save(state, temporary)
+    torch.save({"generator": generator.state_dict()}, temporary)
     os.replace(temporary, path)
     if run is not None:
-        artifact = wandb.Artifact(f"{state['stage']}-{state['run_id']}", type="model",
-                                  metadata={"step": state["step"], "stage": state["stage"]})
+        artifact = wandb.Artifact(f"{stage}-{run.id}", type="model",
+                                  metadata={"step": step, "stage": stage})
         artifact.add_file(str(path), name="training.pt", policy="mutable")
-        run.log_artifact(artifact, aliases=["latest", f"step-{state['step']}"])
-
-
-def resume_history(path, step):
-    """Discard metrics after the restored checkpoint, including a partial last line."""
-    if not path.exists():
-        return
-    with path.open("rb+") as history:
-        while True:
-            offset = history.tell()
-            line = history.readline()
-            if not line:
-                break
-            try:
-                if json.loads(line)["train/step"] <= step:
-                    continue
-            except (ValueError, KeyError):
-                pass
-            history.truncate(offset)
-            break
+        run.log_artifact(artifact, aliases=["latest", f"step-{step}"])
 
 
 def train(args):
@@ -177,34 +143,18 @@ def train(args):
         "stage", "batch_size", "seed", "lr", "lr_drop_step", "pixel_weight",
         "vgg_weight", "vgg_layer", "adv_weight", "div2k_subset")}
     split = {"train": [p[0] for p in train_pairs], "validation": [p[0] for p in valid_pairs]}
-    checkpoint = load_checkpoint(args.resume, args.out) if args.resume else None
-    start = 0
-    sampler_offset = 0
-    if checkpoint:
-        saved_settings = {"div2k_subset": "bicubic", **checkpoint["settings"]}
-        if saved_settings != settings or checkpoint["split"] != split:
-            raise ValueError("Resume settings or DIV2K split changed. Use --init-generator for a new experiment.")
-        start = checkpoint["step"]
-        if "sampler_offset" in checkpoint:
-            sampler_offset = checkpoint["sampler_offset"]
-        elif len(train_pairs) % args.batch_size:
-            # Older checkpoints skipped one tail batch per completed epoch.
-            sampler_offset = start // (len(train_pairs) // args.batch_size)
     stop = args.steps
     if args.epochs is not None:
-        stop = args.epochs * steps_per_epoch - sampler_offset
+        stop = args.epochs * steps_per_epoch
     if stop is None:
         stop = 200_000 if args.stage == "srgan" else 1_000_000
+    if stop <= 0:
+        raise ValueError("Training requires a positive number of updates.")
     existing = args.out / "latest.pt"
-    if args.resume and existing.is_file() and Path(args.resume).resolve() == existing.resolve() and stop == start:
-        print(f"Checkpoint already reached {stop} updates: {existing}")
-        return
-    if stop <= start:
-        raise ValueError(f"Total training target {stop} must exceed completed steps {start}.")
-    if existing.exists() and (not args.resume or Path(args.resume).resolve() != existing.resolve()):
-        raise ValueError(f"{existing} already exists. Resume this file or select a fresh output directory.")
+    if existing.exists():
+        raise ValueError(f"{existing} already exists. Select a fresh output directory.")
     history_path = args.out / "metrics.jsonl"
-    if not args.resume and history_path.exists() and history_path.stat().st_size:
+    if history_path.exists() and history_path.stat().st_size:
         raise ValueError(f"{history_path} already records a run. Select a fresh output directory.")
 
     device = device_for(args.device)
@@ -216,15 +166,10 @@ def train(args):
     discriminator = Discriminator().to(device) if args.adv_weight else None
     vgg = VGGContent(args.vgg_layer).to(device) if args.vgg_weight else None
     perceptual = make_lpips(device) if args.lpips else None
+    if args.init_generator:
+        generator.load_state_dict(load_checkpoint(args.init_generator, args.out)["generator"])
     opt_g = optimizer(generator, args.lr)
     opt_d = optimizer(discriminator, args.lr) if discriminator is not None else None
-    run_id = uuid.uuid4().hex[:12]
-    if checkpoint:
-        restore_training_state(checkpoint, generator, discriminator, opt_g, opt_d, device)
-        run_id = checkpoint["run_id"]
-    elif args.init_generator:
-        generator.load_state_dict(load_checkpoint(args.init_generator, args.out)["generator"])
-    del checkpoint
 
     # Keep the underlying modules for single-image validation and portable checkpoints.
     training_generator = generator
@@ -234,7 +179,7 @@ def train(args):
         if discriminator is not None:
             training_discriminator = torch.nn.DataParallel(discriminator)
 
-    schedules = BatchSchedule(len(train_pairs), args.batch_size, args.seed, start + sampler_offset, stop + sampler_offset)
+    schedules = BatchSchedule(len(train_pairs), args.batch_size, args.seed, 0, stop)
     loader = DataLoader(TrainPatches(train_pairs), batch_sampler=schedules, num_workers=args.workers,
                         pin_memory=device.type == "cuda", generator=torch.Generator().manual_seed(args.seed))
     (args.out / "split.json").write_text(json.dumps(split, indent=2))
@@ -244,20 +189,17 @@ def train(args):
         config["training_gpu_count"] = gpu_count if args.data_parallel else 1
         config["gpu_name"] = torch.cuda.get_device_name(device)
         torch.cuda.reset_peak_memory_stats(device)
-    (args.out / f"config-from-step-{start}.json").write_text(json.dumps(config, indent=2))
+    (args.out / "config-from-step-0.json").write_text(json.dumps(config, indent=2))
     run = None
     if args.wandb_mode != "disabled":
         run = wandb.init(project=args.project, entity=args.entity, name=args.out.name,
-                         id=run_id, resume="allow" if args.resume and args.wandb_mode == "online" else None,
-                         dir=str(args.out), mode=args.wandb_mode, config=settings)
+                         id=uuid.uuid4().hex[:12], dir=str(args.out), mode=args.wandb_mode, config=settings)
         run.config.update(config, allow_val_change=True)
         run.define_metric("train/step")
         run.define_metric("*", step_metric="train/step")
-    print(f"{args.stage}: {start} -> {stop} updates on {device}, output {args.out}", flush=True)
-    if args.resume:
-        resume_history(history_path, start)
+    print(f"{args.stage}: {stop} updates on {device}, output {args.out}", flush=True)
     with history_path.open("a", buffering=1) as history:
-        for step, (lr_image, target) in enumerate(loader, start + 1):
+        for step, (lr_image, target) in enumerate(loader, 1):
             batch_start = time.perf_counter()
             rate = learning_rate(args.lr, args.lr_drop_step, step - 1)
             for opt in (opt_g, opt_d):
@@ -267,9 +209,9 @@ def train(args):
             losses = update_batch(training_generator, training_discriminator, vgg, opt_g, opt_d,
                                   lr_image.to(device), target.to(device), args)
             values = {"train/step": step}
-            if step % args.log_every == 0 or step in (start + 1, stop):
+            if step % args.log_every == 0 or step in (1, stop):
                 values.update({f"train/{k}": v for k, v in losses.items()})
-                values.update({"train/lr": rate, "train/epoch": (step + sampler_offset) / steps_per_epoch})
+                values.update({"train/lr": rate, "train/epoch": step / steps_per_epoch})
                 values["train/update_seconds"] = time.perf_counter() - batch_start
                 if device.type == "cuda":
                     values["train/peak_gpu_gib"] = torch.cuda.max_memory_allocated(device) / 2**30
@@ -280,14 +222,7 @@ def train(args):
                                      args.val_crop_lr, preview, perceptual)
                 values.update({f"val/{k}": v for k, v in scores.items()})
             if step % args.save_every == 0 or step == stop:
-                state = dict(format_version=1, stage=args.stage, settings=settings, config=config, split=split,
-                             step=step, sampler_offset=sampler_offset, run_id=run_id, generator=generator.state_dict(),
-                             opt_g=opt_g.state_dict(), cpu_rng=torch.get_rng_state(),
-                             cuda_rng=torch.cuda.get_rng_state(device) if device.type == "cuda" else None,
-                             mps_rng=torch.mps.get_rng_state() if device.type == "mps" else None,
-                             discriminator=discriminator.state_dict() if discriminator is not None else None,
-                             opt_d=opt_d.state_dict() if opt_d is not None else None)
-                save_checkpoint(args.out, state, run)
+                save_checkpoint(args.out, generator, run, stage=args.stage, step=step)
             if len(values) > 1:
                 print(json.dumps(values), file=history)
                 print(json.dumps(values), flush=True)

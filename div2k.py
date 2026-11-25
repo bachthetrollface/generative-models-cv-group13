@@ -112,7 +112,7 @@ class TrainPatches(Dataset):
 
 
 class BatchSchedule:
-    """Step-addressed crops make mid-epoch resumes independent of worker prefetch."""
+    """Deterministic batches and crop seeds indexed by update."""
     def __init__(self, size, batch_size, seed, start, stop):
         self.size, self.batch_size, self.seed = size, batch_size, seed
         self.start, self.stop = start, stop

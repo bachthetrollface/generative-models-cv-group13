@@ -3,16 +3,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 default_steps=50
 source scripts/pilot_common.sh
-if [[ -n ${RESUME:-} ]]; then
-  start=(--resume "$RESUME")
-elif [[ -n ${GENERATOR:-} ]]; then
+if [[ -n ${GENERATOR:-} ]]; then
   start=(--init-generator "$GENERATOR")
 else
   pretrain_dir="$run_root/srgan-pretrain"
   pretrain_args=(--stage srresnet --out "$pretrain_dir" --steps "${PRETRAIN_STEPS:-200}")
-  if [[ -f "$pretrain_dir/latest.pt" ]]; then
-    pretrain_args+=(--resume "$pretrain_dir/latest.pt")
-  fi
   for ((i = 1; i <= $#; i++)); do
     arg=${!i}
     case "$arg" in
