@@ -1,4 +1,5 @@
 """Pair original image IDs first, then sample aligned ×4 crops."""
+from itertools import zip_longest
 import math
 import random
 from pathlib import Path
@@ -47,8 +48,21 @@ def div2k_pairs(root, split, subset):
     return image_pairs(hr_dir, lr_dir, lr_suffix=suffix, variants=variants)
 
 
-def training_split(root, subset="bicubic"):
-    pairs = div2k_pairs(root, "train", subset)
+def kaggle_hr_pairs(root, folder):
+    directory = root / folder
+    paths = sorted(directory.glob("*.png"))
+    if not paths:
+        raise ValueError(f"No DF2K + OST images in {directory}. Point --data at the extracted Kaggle root.")
+    return [(p.stem, p, None) for p in paths]
+
+
+def training_split(root, subset="bicubic", *, dataset="div2k"):
+    if dataset == "df2k-ost":
+        if subset != "bicubic":
+            raise ValueError("DF2K + OST supports bicubic ×4. Use --dataset div2k for paired DIV2K tracks.")
+        pairs = kaggle_hr_pairs(root, "train/DIV2K/DIV2K_train_HR")
+    else:
+        pairs = div2k_pairs(root, "train", subset)
     expected = {f"{i:04d}" for i in range(1, 801)}
     if {hr_path.stem for _, hr_path, _ in pairs} != expected:
         raise ValueError("Expected all 800 official DIV2K train IDs 0001–0800.")
@@ -66,17 +80,27 @@ def training_split(root, subset="bicubic"):
         assignments[image_id] = split
     if assignments.keys() != expected or list(assignments.values()).count("validation") != 50:
         raise ValueError(f"{SPLIT_FILE} must assign all 800 IDs to 750 training and 50 validation images.")
-    return ([p for p in pairs if assignments[p[1].stem] == "train"],
-            [p for p in pairs if assignments[p[1].stem] == "validation"])
+    train = [p for p in pairs if assignments[p[1].stem] == "train"]
+    valid = [p for p in pairs if assignments[p[1].stem] == "validation"]
+    if dataset == "df2k-ost":
+        validation_groups = [valid]
+        for source in ("Flickr2K", "OST"):
+            manifest = SPLIT_FILE.with_name(f"{source.lower()}_validation.txt")
+            held_out = manifest.read_text(encoding="utf-8").splitlines()
+            samples = {key: (f"{source}/{key}", path, None)
+                       for key, path, _ in kaggle_hr_pairs(root, f"train/{source}")}
+            validation_groups.append([samples.pop(key) for key in held_out if key in samples])
+            train.extend(samples.values())
+        # A short pilot validation takes a prefix, so alternate sources.
+        valid = [pair for group in zip_longest(*validation_groups) for pair in group if pair is not None]
+    return train, valid
 
 
 def read_pair(pair, crop_lr=0, rng=None):
     key, hr_path, lr_path = pair
-    with Image.open(hr_path) as hr, Image.open(lr_path) as lr:
-        w, h = lr.size
+    with Image.open(hr_path) as hr:
+        w, h = hr.width // 4, hr.height // 4
         # Use the nominal ×4 grid, cropping the HR dimensions to a multiple of four.
-        if hr.width // 4 != w or hr.height // 4 != h:
-            raise ValueError(f"Misaligned ×4 pair {key}: HR {hr.size}, LR {lr.size}")
         width, height = w, h
         left = top = 0
         if crop_lr:
@@ -88,8 +112,17 @@ def read_pair(pair, crop_lr=0, rng=None):
             else:
                 left, top = rng.randrange(w - width + 1), rng.randrange(h - height + 1)
         box = (left, top, left + width, top + height)
-        lr = lr.crop(box).convert("RGB")
-        hr = hr.crop(tuple(4 * x for x in box)).convert("RGB")
+        hr_box = tuple(4 * x for x in box)
+        if lr_path is None:
+            # Resize with the surrounding image as filter context, including at crop edges.
+            aligned = hr.crop((0, 0, 4 * w, 4 * h)).convert("RGB")
+            lr = aligned.resize((width, height), Image.Resampling.BICUBIC, box=hr_box)
+        else:
+            with Image.open(lr_path) as original:
+                if original.size != (w, h):
+                    raise ValueError(f"Misaligned ×4 pair {key}: HR {hr.size}, LR {original.size}")
+                lr = original.crop(box).convert("RGB")
+        hr = hr.crop(hr_box).convert("RGB")
     return lr, hr
 
 

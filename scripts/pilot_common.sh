@@ -14,7 +14,8 @@ export WANDB_CONFIG_DIR=${WANDB_CONFIG_DIR:-"$PWD/.cache/wandb/config"}
 common=(--data "${DATA_ROOT:-data}" --div2k-subset "${DIV2K_SUBSET:-bicubic}"
         --batch-size "${BATCH_SIZE:-16}" --workers "${WORKERS:-2}"
         --device "${DEVICE:-cuda}" --log-every "${LOG_EVERY:-10}" --save-every "${SAVE_EVERY:-50}"
-        --lpips --val-every "${VAL_EVERY:-50}" --val-images "${VAL_IMAGES:-8}")
+        --lpips --val-every "${VAL_EVERY:-50}")
+if [[ -n ${VAL_IMAGES:-} ]]; then common+=(--val-images "$VAL_IMAGES"); fi
 duration=(--steps "${STEPS:-$default_steps}")
 if [[ -n ${EPOCHS:-} ]]; then duration=(--epochs "$EPOCHS"); fi
 
@@ -30,7 +31,7 @@ run_gan() {
       arg=${!i}
       case "${arg%%=*}" in
         --help|-h|--lpips|--no-lpips|--data-parallel) args+=("$arg") ;;
-        --arch|--div2k-subset|--data|--device|--workers|--batch-size|--seed|--val-every|--val-images|--val-crop-lr|--save-every|--log-every|--wandb-mode|--project|--entity)
+        --arch|--dataset|--div2k-subset|--data|--device|--workers|--batch-size|--seed|--val-every|--val-images|--val-crop-lr|--save-every|--log-every|--wandb-mode|--project|--entity)
           args+=("$arg")
           if [[ $arg != *=* ]] && ((i < $#)); then
             i=$((i + 1))

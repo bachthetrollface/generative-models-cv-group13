@@ -23,10 +23,11 @@ class MSRTests(unittest.TestCase):
     def setUpClass(cls):
         torch.set_num_threads(1)
 
-    def launcher_args(self, name, *flags, **options):
+    def launcher_args(self, name, *flags, kaggle=False, **options):
         root = Path(__file__).resolve().parents[1]
         env = {"PATH": os.environ["PATH"], "PYTHON": "/bin/echo", **options}
-        output = subprocess.check_output(["bash", f"scripts/run_{name}.sh", *flags],
+        prefix = "kaggle" if kaggle else "run"
+        output = subprocess.check_output(["bash", f"scripts/{prefix}_{name}.sh", *flags],
                                          cwd=root, env=env, text=True)
         stages = []
         for line in output.splitlines():
@@ -54,6 +55,25 @@ class MSRTests(unittest.TestCase):
         self.assertEqual(Path(gan.init_generator), pretrain.out / "latest.pt")
         supplied, = self.launcher_args("msrgan", GENERATOR="my.pt", EPOCHS="2")
         self.assertEqual((supplied.init_generator, supplied.steps, supplied.epochs), ("my.pt", None, 2))
+
+    def test_kaggle_launchers(self):
+        standalone, = self.launcher_args("msrresnet", kaggle=True)
+        self.assertEqual(standalone.out, Path("/kaggle/working/runs/msrresnet"))
+        self.assertIn(str(standalone.data), ("/kaggle/input/df2k-ost",
+                                             "/kaggle/input/datasets/thaihoa1476050/df2k-ost"))
+        self.assertEqual(standalone.dataset, "df2k-ost")
+        self.assertIsNone(standalone.val_images)
+        self.assertTrue(standalone.test_kaggle)
+        pretrain, gan = self.launcher_args("msrgan", "--data-parallel", kaggle=True,
+                                           DATA_ROOT="/custom/input", RUN_ROOT="/custom/output")
+        for args in (pretrain, gan):
+            self.assertEqual(args.data, Path("/custom/input"))
+            self.assertTrue(args.data_parallel)
+        self.assertFalse(pretrain.test_kaggle)
+        self.assertTrue(gan.test_kaggle)
+        self.assertEqual(gan.init_generator, "/custom/output/msrgan-pretrain/latest.pt")
+        supplied, = self.launcher_args("msrgan", kaggle=True, GENERATOR="/input/generator.pt")
+        self.assertEqual(supplied.init_generator, "/input/generator.pt")
 
     def test_schedule_boundaries(self):
         for step, expected in [(0, 2e-4), (125_000, (2e-4 + 1e-7) / 2), (250_000, 1e-7),

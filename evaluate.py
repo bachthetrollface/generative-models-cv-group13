@@ -10,7 +10,7 @@ import torch
 from PIL import Image, ImageDraw
 from torch.nn import functional as F
 
-from div2k import DIV2K_SUBSETS, div2k_pairs, image_pairs, read_pair, rgb_tensor
+from div2k import DIV2K_SUBSETS, div2k_pairs, image_pairs, kaggle_hr_pairs, read_pair, rgb_tensor
 from models import make_generator
 
 
@@ -111,10 +111,31 @@ def evaluate(generator, pairs, device, crop_lr=0, preview=None, perceptual=None,
     return {k: float(np.mean([row[k] for row in rows])) for k in rows[0] if k != "id"}, rows
 
 
+KAGGLE_TEST_SETS = {"kaggle-div2k": "test/DIV2K_valid", "ost300": "test/OutdoorSceneTest300"}
+
+
+def evaluate_checkpoint(checkpoint_path, jobs, device_name, lpips):
+    device = device_for(device_name)
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    arch = checkpoint.get("arch", "srresnet")
+    generator = make_generator(arch).to(device)
+    generator.load_state_dict(checkpoint.get("generator_ema", checkpoint["generator"]))
+    perceptual = make_lpips(device) if lpips else None
+    for name, pairs, output in jobs:
+        scores, rows = evaluate(generator, pairs, device, preview=output / "preview.png",
+                                perceptual=perceptual, sr_dir=output / "sr", arch=arch)
+        with (output / "per-image.csv").open("w", newline="") as file:
+            writer = csv.DictWriter(file, fieldnames=list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+        (output / "mean-scores.json").write_text(json.dumps(scores, indent=2))
+        print(f"{name} {scores}" if name else scores, flush=True)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     div2k_test_sets = {f"div2k-{subset}": subset for subset in DIV2K_SUBSETS}
-    p.add_argument("--test-sets", nargs="+", action="extend", choices=[*div2k_test_sets, "urban100"],
+    p.add_argument("--test-sets", nargs="+", action="extend", choices=[*div2k_test_sets, "urban100", *KAGGLE_TEST_SETS],
                    help="Evaluate named test sets and save each under its own output directory")
     p.add_argument("--data", type=Path, default=Path("data"), help="Root directory for named test sets")
     p.add_argument("--hr", type=Path, help="HR directory for a custom test set")
@@ -136,6 +157,8 @@ def main():
             for name in dict.fromkeys(args.test_sets):
                 if name == "urban100":
                     pairs = image_pairs(args.data / "Urban100_HR", args.data / "Urban100_LR_x4")
+                elif name in KAGGLE_TEST_SETS:
+                    pairs = kaggle_hr_pairs(args.data, KAGGLE_TEST_SETS[name])
                 else:
                     pairs = div2k_pairs(args.data, "valid", div2k_test_sets[name])
                 jobs.append((name, pairs, args.output / name))
@@ -144,21 +167,7 @@ def main():
     except ValueError as exc:
         p.error(str(exc))
 
-    device = device_for(args.device)
-    checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
-    arch = checkpoint.get("arch", "srresnet")
-    generator = make_generator(arch).to(device)
-    generator.load_state_dict(checkpoint.get("generator_ema", checkpoint["generator"]))
-    perceptual = make_lpips(device) if args.lpips else None
-    for name, pairs, output in jobs:
-        scores, rows = evaluate(generator, pairs, device, preview=output / "preview.png",
-                                perceptual=perceptual, sr_dir=output / "sr", arch=arch)
-        with (output / "per-image.csv").open("w", newline="") as file:
-            writer = csv.DictWriter(file, fieldnames=list(rows[0]))
-            writer.writeheader()
-            writer.writerows(rows)
-        (output / "mean-scores.json").write_text(json.dumps(scores, indent=2))
-        print(f"{name} {scores}" if name else scores, flush=True)
+    evaluate_checkpoint(args.checkpoint, jobs, args.device, args.lpips)
 
 
 if __name__ == "__main__":

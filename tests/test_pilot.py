@@ -1,6 +1,7 @@
 import csv
 import json
 import os
+import random
 import subprocess
 import tempfile
 import unittest
@@ -13,7 +14,7 @@ import torch
 from PIL import Image
 from torch import nn
 
-from div2k import BatchSchedule, image_pairs, read_pair, training_split
+from div2k import SPLIT_FILE, BatchSchedule, image_pairs, read_pair, training_split
 from evaluate import main as evaluate_main, y_metrics
 from models import Discriminator, SRResNet, VGGContent
 from train import arguments, learning_rate, load_checkpoint, optimizer, save_checkpoint, update_batch
@@ -106,6 +107,52 @@ class PilotTests(unittest.TestCase):
             self.assertFalse(train_ids & validation_ids)
             self.assertEqual(len({pair[0] for pair in train + validation}), 3200)
 
+    def test_kaggle_split_and_bicubic_crops(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            div2k = root / "train/DIV2K/DIV2K_train_HR"
+            div2k.mkdir(parents=True)
+            for index in range(1, 801):
+                (div2k / f"{index:04}.png").touch()
+            for source in ("train/Flickr2K", "train/OST", "test/DIV2K_valid", "test/OutdoorSceneTest300"):
+                (root / source).mkdir(parents=True)
+                (root / source / "0001.png").touch()
+            expected_holdouts = set()
+            for source, count in (("Flickr2K", 166), ("OST", 562)):
+                ids = SPLIT_FILE.with_name(f"{source.lower()}_validation.txt").read_text().splitlines()
+                self.assertEqual(len(ids), len(set(ids)))
+                self.assertEqual(len(ids), count)
+                for key in ids:
+                    (root / "train" / source / f"{key}.png").touch()
+                    expected_holdouts.add(f"{source}/{key}")
+            train, valid = training_split(root, dataset="df2k-ost")
+            self.assertEqual((len(train), len(valid)), (752, 778))
+            self.assertEqual({key for key, _, _ in valid if "/" in key}, expected_holdouts)
+            self.assertEqual([key.split("/")[0] for key, _, _ in valid[1:3]], ["Flickr2K", "OST"])
+            keys = {key for key, _, _ in train}
+            self.assertEqual(len(keys), len(train))
+            self.assertTrue({"Flickr2K/0001", "OST/0001"} <= keys)
+            self.assertTrue(keys.isdisjoint(key for key, _, _ in valid))
+            self.assertTrue(all(path.is_relative_to(root / "train") for _, path, _ in train + valid))
+            pair = train[-1]
+            pixels = np.random.default_rng(0).integers(256, size=(139, 147, 3), dtype=np.uint8)
+            Image.fromarray(pixels).save(pair[1])
+            lr_full = Image.fromarray(pixels[:136, :144]).resize((36, 34), Image.Resampling.BICUBIC)
+            for seed in (None, 5):
+                rng = random.Random(seed)
+                x, y = (6, 5) if seed is None else (rng.randrange(13), rng.randrange(11))
+                lr, hr = read_pair(pair, 24, None if seed is None else random.Random(seed))
+                np.testing.assert_array_equal(lr, np.asarray(lr_full)[y:y + 24, x:x + 24])
+                np.testing.assert_array_equal(hr, pixels[4*y:4*y + 96, 4*x:4*x + 96])
+
+    def test_training_source_selection(self):
+        for flags, source in (([], "df2k-ost"), (["--div2k-subset", "unknown"], "div2k"),
+                              (["--dataset", "div2k"], "div2k")):
+            with patch("sys.argv", ["train.py", "--stage", "srresnet", "--out", "dummy", *flags]):
+                args = arguments()
+                self.assertEqual(args.dataset, source)
+                self.assertIsNone(args.val_images)
+
     def test_named_evaluation_writes_separate_results_for_each_track(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -116,12 +163,15 @@ class PilotTests(unittest.TestCase):
                 "div2k-realistic-difficult": ("DIV2K_valid_HR", "DIV2K_valid_LR_difficult", "0801", "x4d"),
                 "div2k-realistic-wild": ("DIV2K_valid_HR", "DIV2K_valid_LR_wild", "0801", "x4w"),
                 "urban100": ("Urban100_HR", "Urban100_LR_x4", "img_001", ""),
+                "kaggle-div2k": ("test/DIV2K_valid", None, "0801", ""),
+                "ost300": ("test/OutdoorSceneTest300", None, "OST_001", ""),
             }
             for index, (hr, lr, key, suffix) in enumerate(cases.values()):
                 (root / hr).mkdir(parents=True, exist_ok=True)
-                (root / lr).mkdir(parents=True)
                 Image.new("RGB", (24, 32), "white").save(root / hr / f"{key}.png")
-                Image.new("RGB", (6, 8), (index * 32,) * 3).save(root / lr / f"{key}{suffix}.png")
+                if lr is not None:
+                    (root / lr).mkdir(parents=True)
+                    Image.new("RGB", (6, 8), (index * 32,) * 3).save(root / lr / f"{key}{suffix}.png")
             output, checkpoint = root / "results", root / "checkpoint.pt"
             torch.save({"generator": {}}, checkpoint)
             argv = ["evaluate.py", "--test-sets", *cases, "--data", str(root),
@@ -190,8 +240,11 @@ class PilotTests(unittest.TestCase):
             warmup, gan = commands("pilot_srgan.sh", RUN_ROOT=tmp)
             for flags in (cnn, warmup, gan):
                 self.assertEqual(flags[flags.index("--val-every") + 1], "50")
+                self.assertNotIn("--val-images", flags)
                 self.assertIn("--lpips", flags)
                 self.assertEqual(flags[flags.index("--device") + 1], "cuda")
+            for flags in commands("pilot_srgan.sh", VAL_IMAGES="8", RUN_ROOT=tmp):
+                self.assertEqual(flags[flags.index("--val-images") + 1], "8")
             dp_cnn, = commands("pilot_srresnet.sh", "--data-parallel", RUN_ROOT=tmp)
             dp_warmup, dp_gan = commands("pilot_srgan.sh", "--data-parallel", RUN_ROOT=tmp)
             for flags in (dp_cnn, dp_warmup, dp_gan):
@@ -212,6 +265,9 @@ class PilotTests(unittest.TestCase):
             subset_warmup, subset_gan = commands("pilot_srgan.sh", "--div2k-subset", "unknown", RUN_ROOT=tmp)
             for flags in (subset_warmup, subset_gan):
                 self.assertEqual(flags[-2:], ["--div2k-subset", "unknown"])
+            source_args = ["--dataset=div2k", "--data", "/other/data"]
+            for flags in commands("pilot_srgan.sh", *source_args, RUN_ROOT=tmp):
+                self.assertEqual(flags[-3:], source_args)
             custom, = commands("pilot_srgan.sh", GENERATOR="my.pt", VAL_EVERY="5", EPOCHS="10")
             self.assertEqual(custom[custom.index("--val-every") + 1], "5")
             self.assertEqual(custom[custom.index("--init-generator") + 1], "my.pt")

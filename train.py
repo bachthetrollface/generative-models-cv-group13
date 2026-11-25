@@ -1,4 +1,4 @@
-"""Train ×4 SRResNet and MSRResNet generators on paired DIV2K PNGs."""
+"""Train ×4 SRResNet and MSRResNet generators on DF2K + OST or paired DIV2K images."""
 import argparse
 import copy
 import fcntl
@@ -14,8 +14,8 @@ from torch.nn import functional as F
 from torch.utils.data import DataLoader
 import wandb
 
-from div2k import DIV2K_SUBSETS, BatchSchedule, TrainPatches, training_split
-from evaluate import device_for, evaluate, make_lpips
+from div2k import DIV2K_SUBSETS, BatchSchedule, TrainPatches, kaggle_hr_pairs, training_split
+from evaluate import KAGGLE_TEST_SETS, device_for, evaluate, evaluate_checkpoint, make_lpips
 from models import Discriminator, VGGContent, VGGStyleDiscriminator, make_generator
 
 
@@ -25,6 +25,8 @@ def arguments():
     p.add_argument("--arch", choices=["srresnet", "msrresnet"], default="srresnet",
                    help="Generator family. The run_msr*.sh scripts supply the BasicSR optimization settings.")
     p.add_argument("--data", type=Path, default=Path("data"))
+    p.add_argument("--dataset", choices=["df2k-ost", "div2k"],
+                   help="Training data source (default: df2k-ost for bicubic, div2k for other tracks)")
     p.add_argument("--div2k-subset", choices=DIV2K_SUBSETS, default="bicubic",
                    help="DIV2K ×4 degradation track")
     p.add_argument("--out", type=Path, required=True)
@@ -54,13 +56,19 @@ def arguments():
     p.add_argument("--log-every", type=int, default=10)
     p.add_argument("--save-every", type=int, default=250)
     p.add_argument("--val-every", type=int, default=50)
-    p.add_argument("--val-images", type=int, default=8, help="First N held-out IDs (1–50)")
+    p.add_argument("--test-kaggle", action="store_true",
+                   help="Evaluate the final checkpoint on both Kaggle test folders after training")
+    p.add_argument("--val-images", type=int, help="Limit validation to this many held-out HR images (omit for the full split)")
     p.add_argument("--val-crop-lr", type=int, default=64, help="Central validation crop in LR pixels, 0 for full images")
     p.add_argument("--lpips", action=argparse.BooleanOptionalAction, default=True, help="Also compute LPIPS-Alex on validation images")
     p.add_argument("--wandb-mode", choices=["online", "offline", "disabled"], default=os.getenv("WANDB_MODE", "offline"))
     p.add_argument("--project", default=os.getenv("WANDB_PROJECT", "div2k-sr-group13"))
     p.add_argument("--entity", default=os.getenv("WANDB_ENTITY"))
     args = p.parse_args()
+    if args.dataset is None:
+        args.dataset = "df2k-ost" if args.div2k_subset == "bicubic" else "div2k"
+    if args.dataset == "df2k-ost" and args.div2k_subset != "bicubic":
+        p.error("DF2K + OST supports bicubic ×4. Use --dataset div2k for other tracks.")
     gan = args.stage == "srgan"
     if args.adv_weight is None:
         args.adv_weight = 0.001 if gan else 0.0
@@ -81,8 +89,8 @@ def arguments():
         p.error("Cosine scheduling needs a positive period and a minimum between zero and the initial LR.")
     if not 0 < args.lr_gamma <= 1 or not 0 <= args.adam_beta2 < 1 or not 0 <= args.ema_decay < 1:
         p.error("Use 0 < lr-gamma <= 1 and 0 <= adam-beta2, ema-decay < 1.")
-    if not 1 <= args.val_images <= 50 or 0 < args.val_crop_lr < 5 or args.val_crop_lr < 0:
-        p.error("Use 1–50 validation images and a validation crop of 0 or at least 5 LR pixels.")
+    if (args.val_images is not None and args.val_images < 1) or 0 < args.val_crop_lr < 5 or args.val_crop_lr < 0:
+        p.error("Use a positive validation image count and a validation crop of 0 or at least 5 LR pixels.")
     return args
 
 
@@ -173,13 +181,13 @@ def save_checkpoint(out, generator, run, *, stage, step, arch="srresnet", ema=No
 def train(args):
     msr = args.arch == "msrresnet"
     experiment = ("m" + args.stage) if msr else args.stage
-    train_pairs, valid_pairs = training_split(args.data, args.div2k_subset)
-    valid_ids = set(list(dict.fromkeys(pair[1].stem for pair in valid_pairs))[:args.val_images])
-    validation_sample = [pair for pair in valid_pairs if pair[1].stem in valid_ids]
+    train_pairs, valid_pairs = training_split(args.data, args.div2k_subset, dataset=args.dataset)
+    valid_ids = set(list(dict.fromkeys(pair[1] for pair in valid_pairs))[:args.val_images])
+    validation_sample = [pair for pair in valid_pairs if pair[1] in valid_ids]
     steps_per_epoch = math.ceil(len(train_pairs) / args.batch_size)
     settings = {k: getattr(args, k) for k in (
         "stage", "batch_size", "seed", "lr", "lr_drop_step", "pixel_weight",
-        "vgg_weight", "vgg_layer", "adv_weight", "div2k_subset")}
+        "vgg_weight", "vgg_layer", "adv_weight", "div2k_subset", "dataset")}
     split = {"train": [p[0] for p in train_pairs], "validation": [p[0] for p in valid_pairs]}
     stop = args.steps
     if args.epochs is not None:
@@ -293,4 +301,10 @@ if __name__ == "__main__":
     args.out.mkdir(parents=True, exist_ok=True)
     with (args.out / ".train.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        test_jobs = []
+        if args.test_kaggle:
+            test_jobs = [(name, kaggle_hr_pairs(args.data, folder), args.out / "test" / name)
+                         for name, folder in KAGGLE_TEST_SETS.items()]
         train(args)
+        if test_jobs:
+            evaluate_checkpoint(args.out / "latest.pt", test_jobs, args.device, args.lpips)
