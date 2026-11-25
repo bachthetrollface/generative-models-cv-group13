@@ -4,6 +4,17 @@ if [[ -z ${DATA_ROOT:-} ]]; then
   if [[ ! -d "$DATA_ROOT/train" ]]; then DATA_ROOT=/kaggle/input/df2k-ost; fi
 fi
 export DATA_ROOT
+if [[ -z ${URBAN100_ROOT:-} ]]; then
+  for mount in /kaggle/input/datasets/harshraone/urban100 /kaggle/input/urban100; do
+    if [[ -d "$mount" ]]; then
+      export URBAN100_ROOT="$mount"
+      break
+    fi
+  done
+fi
+if [[ -z ${URBAN100_ROOT:-} ]]; then
+  echo "Skipping Urban100 evaluation. Attach harshraone/urban100 or set URBAN100_ROOT." >&2
+fi
 export RUN_ROOT=${RUN_ROOT:-/kaggle/working/runs}
 export PYTHON=${PYTHON:-python3}
 

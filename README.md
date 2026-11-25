@@ -39,7 +39,7 @@ All training stages read [the fixed DIV2K split](splits/div2k_train_val.txt) and
 
 ## Run MSR training in a Kaggle notebook
 
-Enable a GPU accelerator, attach the DF2K + OST dataset, and switch the notebook working directory to the repository root. Use the notebook's GPU-enabled PyTorch and torchvision. Install the additional training packages in the notebook kernel if needed. Enable Internet for the first LPIPS and VGG19 weight downloads, or supply cached weights through `TORCH_HOME`.
+Enable a GPU accelerator, attach the DF2K + OST and Urban100 datasets, and switch the notebook working directory to the repository root. Use the notebook's GPU-enabled PyTorch and torchvision. Install the additional training packages in the notebook kernel if needed. Enable Internet for the first LPIPS and VGG19 weight downloads, or supply cached weights through `TORCH_HOME`.
 
 ```python
 %pip install wandb==0.19.11 lpips==0.1.4
@@ -52,7 +52,9 @@ Run the commands in separate notebook cells to train MSRResNet and then fine-tun
 !GENERATOR=/kaggle/working/runs/msrresnet/latest.pt bash scripts/kaggle_msrgan.sh
 ```
 
-After training, each Kaggle launcher reloads its final checkpoint and evaluates the averaged generator on all 100 images in `test/DIV2K_valid/` and all 300 in `test/OutdoorSceneTest300/`. Under the model’s run directory, `test/kaggle-div2k/` and `test/ost300/` contain separate scores and super-resolved images.
+Attach `harshraone/urban100` as a second notebook input. Both launchers detect its short or owner-qualified mount. For a custom mount, set `URBAN100_ROOT` to the directory containing `Urban 100/`. Urban100 is used only for final evaluation. [Kaggle Urban100 dataset](https://www.kaggle.com/datasets/harshraone/urban100)
+
+After training, each Kaggle launcher reloads its final checkpoint and evaluates the averaged generator on all 100 images in `test/DIV2K_valid/`, 300 in `test/OutdoorSceneTest300/`, and the 100 supplied ×4 LR/HR pairs from the attached Urban100 dataset. Under the model’s run directory, `test/kaggle-div2k/`, `test/ost300/`, and `test/urban100/` contain separate scores and super-resolved images.
 
 For an independent MSRGAN run, use `!bash scripts/kaggle_msrgan.sh`. It runs its own MSRResNet pretraining stage. To start from a checkpoint attached from a previous notebook, set `GENERATOR` to its mounted path.
 
@@ -136,6 +138,13 @@ To evaluate both held-out Kaggle sets, select `kaggle-div2k` (100 DIV2K validati
 ```bash
 python evaluate.py --data "${DATA_ROOT:-data}" --test-sets kaggle-div2k ost300 \
   --checkpoint runs/t4-pilot/srgan/latest.pt --output runs/eval/srgan
+```
+
+To evaluate an existing checkpoint on the Kaggle Urban100 mount, run from the repository root with the mount path shown in the notebook Input pane:
+
+```bash
+python evaluate.py --test-sets urban100 --urban100-root /kaggle/input/urban100 \
+  --checkpoint /kaggle/working/runs/msrresnet/latest.pt --output /kaggle/working/runs/msrresnet/test
 ```
 
 For the official bicubic ×4 DIV2K pairs, first run `bash scripts/download_div2k.sh --valid-only bicubic`.

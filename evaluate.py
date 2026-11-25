@@ -3,6 +3,7 @@ import argparse
 import csv
 import json
 import math
+import os
 from pathlib import Path
 
 import numpy as np
@@ -10,7 +11,7 @@ import torch
 from PIL import Image, ImageDraw
 from torch.nn import functional as F
 
-from div2k import DIV2K_SUBSETS, div2k_pairs, image_pairs, kaggle_hr_pairs, read_pair, rgb_tensor
+from div2k import DIV2K_SUBSETS, div2k_pairs, image_pairs, kaggle_hr_pairs, read_pair, rgb_tensor, urban100_pairs
 from models import make_generator
 
 
@@ -138,6 +139,8 @@ def main():
     p.add_argument("--test-sets", nargs="+", action="extend", choices=[*div2k_test_sets, "urban100", *KAGGLE_TEST_SETS],
                    help="Evaluate named test sets and save each under its own output directory")
     p.add_argument("--data", type=Path, default=Path("data"), help="Root directory for named test sets")
+    p.add_argument("--urban100-root", type=Path, default=os.getenv("URBAN100_ROOT"),
+                   help="Separate Urban100 dataset mount (defaults to --data)")
     p.add_argument("--hr", type=Path, help="HR directory for a custom test set")
     p.add_argument("--lr", type=Path, help="LR directory for a custom test set")
     p.add_argument("--checkpoint", type=Path, required=True)
@@ -156,7 +159,7 @@ def main():
             jobs = []
             for name in dict.fromkeys(args.test_sets):
                 if name == "urban100":
-                    pairs = image_pairs(args.data / "Urban100_HR", args.data / "Urban100_LR_x4")
+                    pairs = urban100_pairs(args.urban100_root or args.data)
                 elif name in KAGGLE_TEST_SETS:
                     pairs = kaggle_hr_pairs(args.data, KAGGLE_TEST_SETS[name])
                 else:

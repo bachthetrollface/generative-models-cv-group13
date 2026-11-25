@@ -14,7 +14,7 @@ import torch
 from PIL import Image
 from torch import nn
 
-from div2k import SPLIT_FILE, BatchSchedule, image_pairs, read_pair, training_split
+from div2k import SPLIT_FILE, BatchSchedule, image_pairs, read_pair, training_split, urban100_pairs
 from evaluate import main as evaluate_main, y_metrics
 from models import Discriminator, SRResNet, VGGContent
 from train import arguments, learning_rate, load_checkpoint, optimizer, save_checkpoint, update_batch
@@ -152,6 +152,27 @@ class PilotTests(unittest.TestCase):
                 args = arguments()
                 self.assertEqual(args.dataset, source)
                 self.assertIsNone(args.val_images)
+
+    def test_kaggle_urban100_reads_supplied_x4_pairs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            x4 = root / "Urban 100/X4 Urban100/X4"
+            for side, dirname in (("HR", "HIGH x4 URban100"), ("LR", "LOW x4 URban100")):
+                folder = x4 / dirname
+                folder.mkdir(parents=True)
+                for i in range(1, 101):
+                    (folder / f"img_{i:03d}_SRF_4_{side}.png").touch()
+            pairs = urban100_pairs(root)
+            self.assertEqual([p[0] for p in pairs], [f"img_{i:03d}" for i in range(1, 101)])
+            _, hr_path, lr_path = pairs[0]
+            Image.new("RGB", (32, 28), "white").save(hr_path)
+            Image.new("RGB", (8, 7), "black").save(lr_path)
+            lr, hr = read_pair(pairs[0])
+            self.assertEqual(lr.getpixel((0, 0)), (0, 0, 0))
+            self.assertEqual(hr.getpixel((0, 0)), (255, 255, 255))
+            lr_path.unlink()
+            with self.assertRaisesRegex(ValueError, "img_001_SRF_4_LR"):
+                urban100_pairs(root)
 
     def test_named_evaluation_writes_separate_results_for_each_track(self):
         with tempfile.TemporaryDirectory() as tmp:

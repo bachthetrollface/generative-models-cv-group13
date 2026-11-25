@@ -38,6 +38,22 @@ def image_pairs(hr_dir, lr_dir, *, lr_suffix="x4", variants=()):
     return [(key, hr[key], lr[key]) for key in sorted(hr)]
 
 
+def urban100_pairs(root):
+    kaggle_dir = root / "Urban 100" / "X4 Urban100" / "X4"
+    if not kaggle_dir.is_dir():
+        return image_pairs(root / "Urban100_HR", root / "Urban100_LR_x4")
+    pairs = []
+    for index in range(1, 101):
+        key = f"img_{index:03d}"
+        hr = kaggle_dir / "HIGH x4 URban100" / f"{key}_SRF_4_HR.png"
+        lr = kaggle_dir / "LOW x4 URban100" / f"{key}_SRF_4_LR.png"
+        for path in (hr, lr):
+            if not path.is_file():
+                raise ValueError(f"Missing Urban100 ×4 evaluation image: {path}")
+        pairs.append((key, hr, lr))
+    return pairs
+
+
 def div2k_pairs(root, split, subset):
     track, suffix = DIV2K_SUBSETS[subset]
     hr_dir = root / f"DIV2K_{split}_HR"

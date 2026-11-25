@@ -14,7 +14,7 @@ from torch.nn import functional as F
 from torch.utils.data import DataLoader
 import wandb
 
-from div2k import DIV2K_SUBSETS, BatchSchedule, TrainPatches, kaggle_hr_pairs, training_split
+from div2k import DIV2K_SUBSETS, BatchSchedule, TrainPatches, kaggle_hr_pairs, training_split, urban100_pairs
 from evaluate import KAGGLE_TEST_SETS, device_for, evaluate, evaluate_checkpoint, make_lpips
 from models import Discriminator, VGGContent, VGGStyleDiscriminator, make_generator
 
@@ -305,6 +305,9 @@ if __name__ == "__main__":
         if args.test_kaggle:
             test_jobs = [(name, kaggle_hr_pairs(args.data, folder), args.out / "test" / name)
                          for name, folder in KAGGLE_TEST_SETS.items()]
+            urban_root = os.getenv("URBAN100_ROOT")
+            if urban_root:
+                test_jobs.append(("urban100", urban100_pairs(Path(urban_root)), args.out / "test/urban100"))
         train(args)
         if test_jobs:
             evaluate_checkpoint(args.out / "latest.pt", test_jobs, args.device, args.lpips)
