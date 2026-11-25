@@ -10,8 +10,8 @@ import torch
 from PIL import Image, ImageDraw
 from torch.nn import functional as F
 
-from div2k import DIV2K_SUBSETS, bgr_tensor, div2k_pairs, image_pairs, read_pair
-from models import SRResNet
+from div2k import DIV2K_SUBSETS, div2k_pairs, image_pairs, read_pair, rgb_tensor
+from models import make_generator
 
 
 def device_for(name):
@@ -75,18 +75,23 @@ def make_lpips(device):
 
 
 @torch.inference_mode()
-def evaluate(generator, pairs, device, crop_lr=0, preview=None, perceptual=None, *, sr_dir=None):
+def evaluate(generator, pairs, device, crop_lr=0, preview=None, perceptual=None, *, sr_dir=None,
+             arch="srresnet"):
     generator.eval()
     if sr_dir is not None:
         sr_dir.mkdir(parents=True, exist_ok=True)
     rows = []
     for index, pair in enumerate(pairs):
         lr, hr = read_pair(pair, crop_lr=crop_lr)
-        inputs = bgr_tensor(lr).unsqueeze(0).to(device)
-        target = bgr_tensor(hr).flip(0).to(device)
+        inputs = rgb_tensor(lr).unsqueeze(0).to(device)
+        target = rgb_tensor(hr).to(device)
         reference = lr.resize(hr.size, Image.Resampling.BICUBIC)
-        baseline = bgr_tensor(reference).flip(0).to(device)
-        prediction = ((generator(inputs)[0].flip(0) + 1) * 0.5).clamp(0, 1)
+        baseline = rgb_tensor(reference).to(device)
+        if arch == "msrresnet":
+            prediction = generator(inputs)[0]
+        else:
+            prediction = (generator(inputs.flip(1))[0].flip(0) + 1) * 0.5
+        prediction = prediction.clamp(0, 1)
         prediction = (prediction * 255).round() / 255  # evaluate exportable 8-bit images
         row = {"id": pair[0]}
         for name, rgb in (("sr", prediction), ("bicubic", baseline)):
@@ -140,13 +145,14 @@ def main():
         p.error(str(exc))
 
     device = device_for(args.device)
-    generator = SRResNet().to(device)
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
-    generator.load_state_dict(checkpoint["generator"])
+    arch = checkpoint.get("arch", "srresnet")
+    generator = make_generator(arch).to(device)
+    generator.load_state_dict(checkpoint.get("generator_ema", checkpoint["generator"]))
     perceptual = make_lpips(device) if args.lpips else None
     for name, pairs, output in jobs:
         scores, rows = evaluate(generator, pairs, device, preview=output / "preview.png",
-                                perceptual=perceptual, sr_dir=output / "sr")
+                                perceptual=perceptual, sr_dir=output / "sr", arch=arch)
         with (output / "per-image.csv").open("w", newline="") as file:
             writer = csv.DictWriter(file, fieldnames=list(rows[0]))
             writer.writeheader()

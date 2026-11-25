@@ -3,26 +3,6 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 default_steps=50
 source scripts/pilot_common.sh
-if [[ -n ${GENERATOR:-} ]]; then
-  start=(--init-generator "$GENERATOR")
-else
-  pretrain_dir="$run_root/srgan-pretrain"
-  pretrain_args=(--stage srresnet --out "$pretrain_dir" --steps "${PRETRAIN_STEPS:-200}")
-  for ((i = 1; i <= $#; i++)); do
-    arg=${!i}
-    case "$arg" in
-      --lpips|--no-lpips|--data-parallel|--div2k-subset=*) pretrain_args+=("$arg") ;;
-      --div2k-subset)
-        pretrain_args+=("$arg")
-        if ((i < $#)); then
-          i=$((i + 1))
-          pretrain_args+=("${!i}")
-        fi
-        ;;
-    esac
-  done
-  "$python_bin" train.py "${common[@]}" "${pretrain_args[@]}"
-  start=(--init-generator "$pretrain_dir/latest.pt")
-fi
-exec "$python_bin" train.py --stage srgan --out "$run_root/srgan" \
-  "${common[@]}" "${duration[@]}" "${start[@]}" "$@"
+pretrain_args=(--stage srresnet)
+gan_args=(--stage srgan)
+run_gan srgan 200 "$@"

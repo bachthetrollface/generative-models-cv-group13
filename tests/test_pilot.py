@@ -127,9 +127,9 @@ class PilotTests(unittest.TestCase):
             argv = ["evaluate.py", "--test-sets", *cases, "--data", str(root),
                     "--output", str(output), "--checkpoint", str(checkpoint), "--device", "cpu", "--no-lpips"]
             with (patch("sys.argv", argv), patch("builtins.print"),
-                  patch("evaluate.SRResNet", return_value=nn.Upsample(scale_factor=4)) as create_model):
+                  patch("evaluate.make_generator", return_value=nn.Upsample(scale_factor=4)) as create_model):
                 evaluate_main()
-            create_model.assert_called_once()
+            create_model.assert_called_once_with("srresnet")
             self.assertEqual({folder.name for folder in output.iterdir()}, set(cases))
             for name, (_, _, key, _) in cases.items():
                 result = output / name

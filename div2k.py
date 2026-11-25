@@ -93,21 +93,32 @@ def read_pair(pair, crop_lr=0, rng=None):
     return lr, hr
 
 
+def rgb_tensor(image):
+    return torch.from_numpy(np.array(image)).permute(2, 0, 1).float().div_(255)
+
+
 def bgr_tensor(image):
-    rgb = torch.from_numpy(np.array(image)).permute(2, 0, 1)
-    return rgb.flip(0).float().div_(255)
+    return rgb_tensor(image).flip(0)
 
 
 class TrainPatches(Dataset):
-    def __init__(self, pairs):
+    def __init__(self, pairs, *, msr=False):
         self.pairs = pairs
+        self.msr = msr
 
     def __len__(self):
         return len(self.pairs)
 
     def __getitem__(self, key):
         index, crop_seed = key
-        lr, hr = read_pair(self.pairs[index], crop_lr=24, rng=random.Random(crop_seed))
+        rng = random.Random(crop_seed)
+        lr, hr = read_pair(self.pairs[index], crop_lr=32 if self.msr else 24, rng=rng)
+        if self.msr:
+            for transform in (Image.Transpose.FLIP_LEFT_RIGHT, Image.Transpose.FLIP_TOP_BOTTOM,
+                              Image.Transpose.TRANSPOSE):
+                if rng.random() < 0.5:
+                    lr, hr = lr.transpose(transform), hr.transpose(transform)
+            return rgb_tensor(lr), rgb_tensor(hr)
         return bgr_tensor(lr), bgr_tensor(hr).mul_(2).sub_(1)
 
 

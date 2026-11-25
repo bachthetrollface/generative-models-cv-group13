@@ -1,6 +1,6 @@
-# SRResNet and SRGAN on DIV2K ×4
+# SRResNet, SRGAN, MSRResNet and MSRGAN on DIV2K ×4
 
-Each developer can run either pilot independently. SRResNet trains from scratch for 200 pixel-MSE updates. SRGAN runs its own 200-update MSE pretraining stage and initializes the GAN from those weights for 50 updates with pixel MSE plus adversarial loss.
+The SRResNet pilot trains from scratch for 250 pixel-MSE updates. The SRGAN pilot runs its own 200-update MSE pretraining stage and initializes the GAN from those weights for 50 updates. The dedicated MSRResNet and MSRGAN launchers use the full BasicSR ×4 training schedules.
 
 ## Run the pilot
 
@@ -33,6 +33,34 @@ RUN_ROOT=runs/unknown bash scripts/pilot_srgan.sh --div2k-subset unknown
 
 All training stages read [the fixed DIV2K split](splits/div2k_train_val.txt) and record it in `split.json`. It assigns 750 HR image IDs to training and 50 to internal validation. Wild keeps all four LR training variants of each HR image in the same partition, for 3,000 training pairs and 200 internal validation pairs. The official validation IDs 0801–0900 are used as project test images for each track. To switch tracks from a trained generator, initialize a fresh run from its weights with `--init-generator` (or `GENERATOR` in the SRGAN launcher).
 
+## Train and evaluate MSRResNet and MSRGAN
+
+After the environment and DIV2K setup above, run these commands from the repository root. Passing the standalone MSRResNet checkpoint to MSRGAN lets both experiments share the same pretraining run.
+
+```bash
+bash scripts/run_msrresnet.sh
+GENERATOR=runs/msrresnet/latest.pt bash scripts/run_msrgan.sh
+
+bash scripts/download_urban100.sh
+for model in msrresnet msrgan; do
+  python evaluate.py --checkpoint "runs/$model/latest.pt" \
+    --test-sets div2k-bicubic urban100 --output "runs/eval/$model"
+done
+```
+
+Running `bash scripts/run_msrgan.sh` by itself first trains an MSRResNet in `runs/msrgan-pretrain/`, then fine-tunes the GAN in `runs/msrgan/`. A shorter two-stage run can use `RUN_ROOT=runs/msr-smoke PRETRAIN_STEPS=2 STEPS=2 bash scripts/run_msrgan.sh`. Schedule boundaries always count optimizer updates at their original scale.
+
+| Stage | Generator loss on RGB images at the [0, 1] intensity scale | Learning rate | Default updates |
+|---|---|---|---:|
+| MSRResNet | Pixel L1 | Adam at 2e-4, four 250,000-update cosine cycles with minimum 1e-7 | 1,000,000 |
+| MSRGAN | 0.01 × pixel L1 + 1 × VGG19 feature L1 at conv5_4 before ReLU + 0.005 × vanilla GAN loss | Both Adam optimizers start at 1e-4 and halve the rate after 50k, 100k, 200k and 300k updates | 400,000 |
+
+Both stages use Adam betas (0.9, 0.99), generator EMA decay 0.999, and aligned 32×32 LR / 128×128 HR crops with random flips and transpositions. The generator has 16 residual blocks without batch normalization and adds a learned residual to bilinearly upsampled input. MSRGAN uses a VGG-style discriminator and updates the generator and discriminator once per batch. These settings follow BasicSR's published ×4 configurations. [MSRResNet configuration](https://github.com/XPixelGroup/BasicSR/blob/master/options/train/SRResNet_SRGAN/train_MSRResNet_x4.yml) · [MSRGAN configuration](https://github.com/XPixelGroup/BasicSR/blob/master/options/train/SRResNet_SRGAN/train_MSRGAN_x4.yml)
+
+Edit `scripts/msr_common.sh` to change the MSR recipes. It selects `--arch msrresnet` and supplies stage-specific optimizer and loss arguments to `train.py`. It sources `scripts/pilot_common.sh` for data, batch size, device, logging, validation and duration overrides. Both families use the project's fixed DIV2K split, epoch sampler, and PSNR-Y, SSIM-Y and LPIPS evaluation protocol.
+
+MSR checkpoints store the architecture, the current generator weights for fine-tuning, and the averaged generator weights for evaluation. The GAN initializes both sets from the pretraining checkpoint. Evaluation selects the architecture and averaged weights automatically. Existing SRResNet and SRGAN checkpoints also work with the same evaluation command.
+
 ## Train a single experiment on two T4s
 
 On a machine with two T4s, select both devices and pass `--data-parallel` to the experiment you want to run.
@@ -63,7 +91,7 @@ Under `runs/t4-pilot/`, the independent experiments write to `srresnet/` and `sr
 
 The T4 scripts default to online W&B logging, including images and versioned checkpoint artifacts. Set `WANDB_PROJECT` and optionally `WANDB_ENTITY` before starting. On an offline machine, set `WANDB_MODE=offline` and skip login. To upload an offline run later, use `wandb sync <offline-run-directory>` on the directory printed by W&B and keep the local artifact staging directory until sync completes. Use `WANDB_MODE=disabled` for local checkpoints, images, and JSONL only.
 
-The trainer atomically replaces `latest.pt` at each save interval and at the final update. The file contains only the generator parameters and buffers, including BatchNorm statistics. W&B versions contain the same weights under `training.pt` and carry `latest` and `step-N` aliases. Both new and older checkpoints can supply generator weights for evaluation or `--init-generator`.
+The trainer atomically replaces `latest.pt` at each save interval and at the final update. The SRResNet and SRGAN pilots save only the generator parameters and buffers, including BatchNorm statistics. W&B versions contain the same weights under `training.pt` and carry `latest` and `step-N` aliases. Both new and older checkpoints can supply generator weights for evaluation or `--init-generator`.
 
 ```bash
 # Run a fresh SRResNet experiment for 500 updates.
