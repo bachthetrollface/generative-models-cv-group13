@@ -22,4 +22,4 @@ export TORCH_HOME=${TORCH_HOME:-"${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/torch"}
 export WANDB_CACHE_DIR=${WANDB_CACHE_DIR:-"${TMPDIR:-/tmp}/wandb/cache"}
 export WANDB_DATA_DIR=${WANDB_DATA_DIR:-"$RUN_ROOT/.wandb/staging"}
 export WANDB_CONFIG_DIR=${WANDB_CONFIG_DIR:-"${TMPDIR:-/tmp}/wandb/config"}
-export WANDB_MODE=${WANDB_MODE:-disabled}
+export WANDB_MODE=${WANDB_MODE:-online}

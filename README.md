@@ -58,7 +58,7 @@ After training, each Kaggle launcher reloads its final checkpoint and evaluates 
 
 For an independent MSRGAN run, use `!bash scripts/kaggle_msrgan.sh`. It runs its own MSRResNet pretraining stage. To start from a checkpoint attached from a previous notebook, set `GENERATOR` to its mounted path.
 
-Both launchers detect the short and owner-qualified Kaggle dataset paths and save runs under `runs/` inside the cloned repository. Override these with `DATA_ROOT` and `RUN_ROOT`. They use the full training schedules and all 778 validation images by default. Set `STEPS` and `PRETRAIN_STEPS` for shorter runs, or pass `--data-parallel` when using two GPUs. W&B logging defaults to disabled on Kaggle. Set `WANDB_MODE=online` with W&B credentials to enable it.
+Both launchers detect the short and owner-qualified Kaggle dataset paths and save runs under `runs/` inside the cloned repository. Override these with `DATA_ROOT` and `RUN_ROOT`. They use the full training schedules and all 778 validation images by default. Set `STEPS` and `PRETRAIN_STEPS` for shorter runs, or pass `--data-parallel` when using two GPUs. W&B logging defaults to online on Kaggle. Enable notebook Internet and authenticate with W&B before training. Set `WANDB_MODE=offline` to sync later or `WANDB_MODE=disabled` for local metrics only.
 
 ## Train and evaluate MSRResNet and MSRGAN
 
