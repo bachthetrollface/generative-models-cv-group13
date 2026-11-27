@@ -49,7 +49,7 @@ Run the commands in separate notebook cells to train MSRResNet and then fine-tun
 
 ```bash
 !bash scripts/kaggle_msrresnet.sh
-!GENERATOR=/kaggle/working/runs/msrresnet/latest.pt bash scripts/kaggle_msrgan.sh
+!GENERATOR=runs/msrresnet/latest.pt bash scripts/kaggle_msrgan.sh
 ```
 
 Attach `harshraone/urban100` as a second notebook input. Both launchers detect its short or owner-qualified mount. For a custom mount, set `URBAN100_ROOT` to the directory containing `Urban 100/`. Urban100 is used only for final evaluation. [Kaggle Urban100 dataset](https://www.kaggle.com/datasets/harshraone/urban100)
@@ -58,7 +58,7 @@ After training, each Kaggle launcher reloads its final checkpoint and evaluates 
 
 For an independent MSRGAN run, use `!bash scripts/kaggle_msrgan.sh`. It runs its own MSRResNet pretraining stage. To start from a checkpoint attached from a previous notebook, set `GENERATOR` to its mounted path.
 
-Both launchers detect the short and owner-qualified Kaggle dataset paths and save runs under `/kaggle/working/runs`. Override these with `DATA_ROOT` and `RUN_ROOT`. They use the full training schedules and all 778 validation images by default. Set `STEPS` and `PRETRAIN_STEPS` for shorter runs, or pass `--data-parallel` when using two GPUs. W&B logging defaults to disabled on Kaggle. Set `WANDB_MODE=online` with W&B credentials to enable it.
+Both launchers detect the short and owner-qualified Kaggle dataset paths and save runs under `runs/` inside the cloned repository. Override these with `DATA_ROOT` and `RUN_ROOT`. They use the full training schedules and all 778 validation images by default. Set `STEPS` and `PRETRAIN_STEPS` for shorter runs, or pass `--data-parallel` when using two GPUs. W&B logging defaults to disabled on Kaggle. Set `WANDB_MODE=online` with W&B credentials to enable it.
 
 ## Train and evaluate MSRResNet and MSRGAN
 
@@ -144,7 +144,7 @@ To evaluate an existing checkpoint on the Kaggle Urban100 mount, run from the re
 
 ```bash
 python evaluate.py --test-sets urban100 --urban100-root /kaggle/input/urban100 \
-  --checkpoint /kaggle/working/runs/msrresnet/latest.pt --output /kaggle/working/runs/msrresnet/test
+  --checkpoint runs/msrresnet/latest.pt --output runs/msrresnet/test
 ```
 
 For the official bicubic ×4 DIV2K pairs, first run `bash scripts/download_div2k.sh --valid-only bicubic`.

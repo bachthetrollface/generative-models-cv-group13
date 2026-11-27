@@ -15,10 +15,9 @@ fi
 if [[ -z ${URBAN100_ROOT:-} ]]; then
   echo "Skipping Urban100 evaluation. Attach harshraone/urban100 or set URBAN100_ROOT." >&2
 fi
-export RUN_ROOT=${RUN_ROOT:-/kaggle/working/runs}
+export RUN_ROOT=${RUN_ROOT:-runs}
 export PYTHON=${PYTHON:-python3}
 
-# A repository attached as notebook input can be read-only.
 export TORCH_HOME=${TORCH_HOME:-"${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/torch"}
 export WANDB_CACHE_DIR=${WANDB_CACHE_DIR:-"${TMPDIR:-/tmp}/wandb/cache"}
 export WANDB_DATA_DIR=${WANDB_DATA_DIR:-"$RUN_ROOT/.wandb/staging"}

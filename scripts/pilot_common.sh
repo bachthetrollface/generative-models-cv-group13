@@ -12,9 +12,9 @@ export WANDB_CACHE_DIR=${WANDB_CACHE_DIR:-"$PWD/.cache/wandb/cache"}
 export WANDB_DATA_DIR=${WANDB_DATA_DIR:-"$PWD/.cache/wandb/staging"}
 export WANDB_CONFIG_DIR=${WANDB_CONFIG_DIR:-"$PWD/.cache/wandb/config"}
 common=(--data "${DATA_ROOT:-data}" --div2k-subset "${DIV2K_SUBSET:-bicubic}"
-        --batch-size "${BATCH_SIZE:-16}" --workers "${WORKERS:-2}"
-        --device "${DEVICE:-cuda}" --log-every "${LOG_EVERY:-10}" --save-every "${SAVE_EVERY:-50}"
-        --lpips --val-every "${VAL_EVERY:-50}")
+        --batch-size "${BATCH_SIZE:-32}" --workers "${WORKERS:-2}"
+        --device "${DEVICE:-cuda}" --log-every "${LOG_EVERY:-100}" --save-every "${SAVE_EVERY:-500}"
+        --lpips --val-every "${VAL_EVERY:-500}")
 if [[ -n ${VAL_IMAGES:-} ]]; then common+=(--val-images "$VAL_IMAGES"); fi
 duration=(--steps "${STEPS:-$default_steps}")
 if [[ -n ${EPOCHS:-} ]]; then duration=(--epochs "$EPOCHS"); fi

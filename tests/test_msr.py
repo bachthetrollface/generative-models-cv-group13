@@ -58,7 +58,7 @@ class MSRTests(unittest.TestCase):
 
     def test_kaggle_launchers(self):
         standalone, = self.launcher_args("msrresnet", kaggle=True)
-        self.assertEqual(standalone.out, Path("/kaggle/working/runs/msrresnet"))
+        self.assertEqual(standalone.out, Path("runs/msrresnet"))
         self.assertIn(str(standalone.data), ("/kaggle/input/df2k-ost",
                                              "/kaggle/input/datasets/thaihoa1476050/df2k-ost"))
         self.assertEqual(standalone.dataset, "df2k-ost")
